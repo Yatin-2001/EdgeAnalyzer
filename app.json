@@ -30,7 +30,8 @@
           "enableOpenCLAndHexagon": true,
           "enableVulkan": true
         }
-      ]
+      ],
+      "expo-sqlite"
     ]
   }
 }

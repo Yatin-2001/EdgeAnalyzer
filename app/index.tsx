@@ -5,812 +5,425 @@ import {
   View,
   TextInput,
   TouchableOpacity,
-  ScrollView,
+  FlatList,
   StatusBar,
   ActivityIndicator,
   Alert,
+  KeyboardAvoidingView,
+  Platform,
 } from 'react-native';
-
-import { File } from 'expo-file-system';
+import { useSafeAreaInsets } from 'react-native-safe-area-context';
 
 import {
   LLMService,
   LLMStatus,
   PerformanceMetrics,
 } from '@/src/services/LLMService';
-
+import { ModelManager, ModelInfo } from '@/src/services/ModelManager';
+import { ContextManager } from '@/src/services/ContextManager';
 import {
-  ModelManager,
-  ModelInfo,
-} from '@/src/services/ModelManager';
+  getAllConversations,
+  getConversationById,
+  createConversation,
+  deleteConversation,
+  getMessagesByConversation,
+  insertMessage,
+  updateConversationTitle,
+  getDefaultModel,
+  getModelById,
+  ConversationRecord,
+  MessageRecord,
+  ModelRecord,
+} from '@/src/database/repository';
+import { ModelRegistryModal } from '@/src/components/ModelRegistryModal';
+import { ConversationDrawer } from '@/src/components/ConversationDrawer';
 
-import {
-  useSafeAreaInsets,
-} from 'react-native-safe-area-context';
+export default function ChatScreen() {
+  const [conversations, setConversations] = useState<ConversationRecord[]>([]);
+  const [activeConv, setActiveConv] = useState<ConversationRecord | null>(null);
+  const [messages, setMessages] = useState<MessageRecord[]>([]);
+  const [streamingContent, setStreamingContent] = useState('');
 
-const PRESET_PROMPTS = [
-  'Explain how an engine turbocharger works in 2 concise sentences.',
-  'List 3 key differences between OpenCL and Vulkan compute pipelines.',
-  'Generate a JSON profile containing id, name, and 3 security roles.',
-];
-
-export default function App() {
   const [status, setStatus] = useState<LLMStatus>('UNLOADED');
-  const [model, setModel] = useState<ModelInfo | null>(null);
   const [loadProgress, setLoadProgress] = useState(0);
-  const [prompt, setPrompt] = useState('');
-  const [output, setOutput] = useState('');
   const [metrics, setMetrics] = useState<PerformanceMetrics | null>(null);
+  const [prompt, setPrompt] = useState('');
+
+  const [isRegistryOpen, setRegistryOpen] = useState(false);
+  const [isDrawerOpen, setDrawerOpen] = useState(false);
 
   const insets = useSafeAreaInsets();
+  const llm = useRef(LLMService.getInstance()).current;
+  const modelManager = useRef(ModelManager.getInstance()).current;
+  const flatListRef = useRef<FlatList>(null);
 
-  const llm = useRef(
-      LLMService.getInstance()
-  ).current;
-
-  const modelManager = useRef(
-      ModelManager.getInstance()
-  ).current;
-
-  const scrollViewRef = useRef<ScrollView>(null);
-
-  /*
-   * Cleanup when the screen/app is unmounted.
-   *
-   * Important:
-   * 1. Release native llama context first.
-   * 2. Then remove the working model copy.
-   *
-   * The original user-selected model is never deleted.
-   */
+  // Initialize DB & load latest conversation
   useEffect(() => {
+    (async () => {
+      const allConvs = await getAllConversations();
+      setConversations(allConvs);
+
+      if (allConvs.length > 0) {
+        await switchConversation(allConvs[0]);
+      } else {
+        await handleNewConversation();
+      }
+    })();
+
     return () => {
-      const cleanup = async () => {
-        try {
-          await llm.unloadModel();
-        } catch (error) {
-          console.error(
-              '[UI] Failed to unload model during cleanup:',
-              error,
-          );
-        }
-
-        try {
-          await modelManager.deleteWorkingCopy();
-        } catch (error) {
-          console.error(
-              '[UI] Failed to delete working model during cleanup:',
-              error,
-          );
-        }
-      };
-
-      cleanup();
+      llm.unloadModel().catch(() => {});
+      modelManager.deleteWorkingCopy().catch(() => {});
     };
   }, []);
 
-  /**
-   * Opens Android's native file picker and loads the selected GGUF.
-   */
-  const handlePickModel = async () => {
-    if (status === 'LOADING' || status === 'GENERATING') {
-      return;
+  const switchConversation = async (conv: ConversationRecord) => {
+    setActiveConv(conv);
+    const msgs = await getMessagesByConversation(conv.id);
+    setMessages(msgs);
+    setStreamingContent('');
+    await ensureModelLoaded(conv.model_id);
+  };
+
+  const handleNewConversation = async () => {
+    const defaultMod = await getDefaultModel();
+    const created = await createConversation('New Chat', defaultMod?.id || null);
+    setConversations((prev) => [created, ...prev]);
+    await switchConversation(created);
+    setDrawerOpen(false);
+  };
+
+  const handleDeleteConversation = async (id: string) => {
+    await deleteConversation(id);
+    const updated = await getAllConversations();
+    setConversations(updated);
+    if (activeConv?.id === id) {
+      if (updated.length > 0) {
+        await switchConversation(updated[0]);
+      } else {
+        await handleNewConversation();
+      }
     }
+  };
 
+  /**
+   * Gated model loading logic.
+   */
+  const ensureModelLoaded = async (targetModelId: string | null) => {
     try {
-      /*
-       * Open Android's native file picker.
-       *
-       * No MANAGE_EXTERNAL_STORAGE permission is required.
-       */
-      const pickedFile = await File.pickFileAsync(
-          undefined,
-          '*/*',
-      );
+      let selectedRecord: ModelRecord | null = null;
+      if (targetModelId) {
+        selectedRecord = await getModelById(targetModelId);
+      }
+      if (!selectedRecord) {
+        selectedRecord = await getDefaultModel();
+      }
 
-      if (!pickedFile) {
-        console.log('[UI] Model selection cancelled.');
+      if (!selectedRecord) {
+        setStatus('UNLOADED');
         return;
       }
 
-      /*
-       * Expo's API can represent the result as File | File[].
-       * We only support selecting one model.
-       */
-      if (!(pickedFile instanceof File)) {
-        console.error(
-            '[UI] Model selection failed: expected a single File.',
-        );
+      const activeModelInfo = modelManager.getCurrentModel();
+      if (
+          activeModelInfo?.originalUri === selectedRecord.original_uri &&
+          llm.isReady()
+      ) {
+        setStatus('READY');
         return;
-      }
-
-      console.log(
-          '[UI] Selected model URI:',
-          pickedFile.uri,
-      );
-
-      console.log(
-          '[UI] Selected model name:',
-          pickedFile.name,
-      );
-
-
-      /*
-         '[UI] Selected model URI:', 'content://com.android.providers.downloads.documents/document/msf%3A18903'
-         '[UI] Selected model name:', 'msf:18903'
-
-         We get File Id from picker not the exact File Location or Name.
-       */
-
-      /*
-       * If another model is currently loaded, unload it before
-       * replacing the working copy.
-       */
-      if (llm.isReady()) {
-        await llm.unloadModel();
-        await modelManager.deleteWorkingCopy();
       }
 
       setStatus('LOADING');
       setLoadProgress(0);
-      setOutput('');
-      setMetrics(null);
 
-      /*
-       * ModelManager owns the storage lifecycle.
-       *
-       * Input:
-       *   content://... / file://...
-       *
-       * Output:
-       *   ModelInfo containing the app-private working URI.
-       */
-      console.log('[UI] Preparing selected model...');
-
-      const preparedModel = await modelManager.selectModel(
-          pickedFile.uri,
-          pickedFile.name,
-      );
-
-      console.log(
-          '[UI] Model prepared:',
-          preparedModel,
-      );
-
-      setModel(preparedModel);
-
-      /*
-       * IMPORTANT:
-       *
-       * LLMService receives ONLY the working copy.
-       *
-       * It should never directly access the original model selected
-       * by the user.
-       */
-      if (!preparedModel.workingUri) {
-        throw new Error(
-            'ModelManager did not provide a working model URI.',
-        );
-      }
-
-      console.log(
-          '[UI] Loading working model:',
-          preparedModel.workingUri,
-      );
+      const prepared = await modelManager.prepareModelFromRecord(selectedRecord);
+      if (!prepared.workingUri) throw new Error('Working model copy missing.');
 
       await llm.loadModel(
-          preparedModel.workingUri,
-          preparedModel.originalName,
-          (progress) => {
-            setLoadProgress(
-                Math.round(progress * 100),
-            );
-          },
+          prepared.workingUri,
+          prepared.originalName,
+          (progress) => setLoadProgress(Math.round(progress * 100))
       );
 
-      const finalStatus = llm.getStatus();
-
-      setStatus(finalStatus);
-
-      console.log(
-          '[UI] Model loading completed. Status:',
-          finalStatus,
-      );
-
+      setStatus(llm.getStatus());
     } catch (error) {
-      console.error(
-          '[UI] Model selection/loading failed:',
-          error,
-      );
-
-      /*
-       * Make sure the native context is not left partially loaded.
-       */
-      try {
-        await llm.unloadModel();
-      } catch (cleanupError) {
-        console.error(
-            '[UI] Failed to cleanup LLM after load failure:',
-            cleanupError,
-        );
-      }
-
-      /*
-       * Remove the working copy if model loading failed.
-       * The original model remains untouched.
-       */
-      try {
-        await modelManager.deleteWorkingCopy();
-      } catch (cleanupError) {
-        console.error(
-            '[UI] Failed to cleanup working model:',
-            cleanupError,
-        );
-      }
-
-      setModel(null);
       setStatus('ERROR');
-      setLoadProgress(0);
-
       Alert.alert(
           'Model Load Failed',
-          error instanceof Error
-              ? error.message
-              : String(error),
+          error instanceof Error ? error.message : String(error)
       );
     }
   };
 
-  /**
-   * Unloads the current model and removes the working copy.
-   *
-   * The original model selected by the user is NEVER deleted.
-   */
-  const handleUnloadModel = async () => {
-    if (status === 'GENERATING') {
-      return;
-    }
+  const handleSendMessage = async () => {
+    if (!prompt.trim() || !activeConv || !llm.isReady()) return;
 
-    try {
-      setStatus('LOADING');
+    const userText = prompt.trim();
+    setPrompt('');
 
-      /*
-       * Native llama context must be released first.
-       */
-      await llm.unloadModel();
+    const userMsg = await insertMessage(activeConv.id, 'user', userText);
+    const updatedMessages = [...messages, userMsg];
+    setMessages(updatedMessages);
 
-      /*
-       * Only the temporary working copy is deleted.
-       */
-      await modelManager.deleteWorkingCopy();
+    // Build context window
+    const formattedPrompt = ContextManager.buildSlidingContextPrompt(
+        updatedMessages,
+        activeConv.system_prompt || undefined,
+        'llama3'
+    );
 
-      setModel(null);
-      setStatus('UNLOADED');
-      setOutput('');
-      setMetrics(null);
-      setLoadProgress(0);
-
-    } catch (error) {
-      console.error(
-          '[UI] Failed to unload model:',
-          error,
-      );
-
-      setStatus(llm.getStatus());
-
-      Alert.alert(
-          'Unload Failed',
-          error instanceof Error
-              ? error.message
-              : String(error),
-      );
-    }
-  };
-
-  /**
-   * Sends a prompt to the currently loaded model.
-   */
-  const handleSend = async () => {
-    if (!prompt.trim() || !llm.isReady()) {
-      return;
-    }
-
-    setOutput('');
-    setMetrics(null);
     setStatus('GENERATING');
+    setStreamingContent('');
 
     try {
-      await llm.streamCompletion(
-          prompt,
+      const { fullText, metrics: genMetrics } = await llm.streamCompletion(
+          formattedPrompt,
           {
             onToken: (token) => {
-              setOutput((prev) => prev + token);
-
-              scrollViewRef.current?.scrollToEnd({
-                animated: false,
-              });
+              setStreamingContent((prev) => prev + token);
             },
-
-            onMetrics: (m) => {
-              setMetrics(m);
-              setStatus(llm.getStatus());
-            },
-          },
+            onMetrics: (m) => setMetrics(m),
+          }
       );
 
-      /*
-       * streamCompletion normally transitions back to READY.
-       * Explicitly synchronize the UI state.
-       */
+      const assistantMsg = await insertMessage(
+          activeConv.id,
+          'assistant',
+          fullText,
+          genMetrics.totalTokens
+      );
+
+      setMessages((prev) => [...prev, assistantMsg]);
+      setStreamingContent('');
       setStatus(llm.getStatus());
 
+      // Auto-title generation after the first turn
+      if (messages.length === 0) {
+        const title = await llm.generateTitle(userText);
+        await updateConversationTitle(activeConv.id, title);
+        setActiveConv((prev) => (prev ? { ...prev, title } : null));
+        setConversations(await getAllConversations());
+      }
     } catch (error) {
-      console.error(
-          '[UI] Inference failed:',
-          error,
-      );
-
       setStatus(llm.getStatus());
-
-      Alert.alert(
-          'Inference Error',
-          error instanceof Error
-              ? error.message
-              : String(error),
-      );
+      Alert.alert('Inference Error', String(error));
     }
   };
-
-  /**
-   * Stops active generation.
-   */
-  const handleStop = async () => {
-    try {
-      await llm.stopCompletion();
-      setStatus(llm.getStatus());
-    } catch (error) {
-      console.error(
-          '[UI] Failed to stop generation:',
-          error,
-      );
-
-      Alert.alert(
-          'Stop Failed',
-          error instanceof Error
-              ? error.message
-              : String(error),
-      );
-    }
-  };
-
-  const getStatusBadgeColor = () => {
-    switch (status) {
-      case 'READY':
-        return '#10B981';
-
-      case 'GENERATING':
-        return '#3B82F6';
-
-      case 'LOADING':
-        return '#F59E0B';
-
-      case 'ERROR':
-        return '#EF4444';
-
-      default:
-        return '#64748B';
-    }
-  };
-
-  /*
-   * Human-readable model name for the UI.
-   */
-  const modelName = model?.originalName || 'No model selected';
 
   return (
-      <View
-          style={[
-            styles.container,
-            {
-              paddingTop: insets.top,
-              paddingBottom: insets.bottom,
-            },
-          ]}
-      >
-        <StatusBar
-            barStyle="light-content"
-            backgroundColor="#0F172A"
-        />
+      <View style={[styles.screen, { paddingTop: insets.top }]}>
+        <StatusBar barStyle="light-content" backgroundColor="#0F172A" />
 
-        {/* Header & Status Section */}
-        <View style={styles.header}>
-          <View style={{ flex: 1 }}>
-            <Text style={styles.title}>
-              LLM Models On-Device
-            </Text>
-
-            <Text style={styles.subtitle}>
-              OnePlus 15 • Adreno Hardware Acceleration
-            </Text>
-          </View>
-
-          <View
-              style={[
-                styles.badge,
-                {
-                  backgroundColor:
-                      getStatusBadgeColor(),
-                },
-              ]}
+        {/* Top Navigation Bar */}
+        <View style={styles.topBar}>
+          <TouchableOpacity
+              style={styles.iconBtn}
+              onPress={() => setDrawerOpen(true)}
           >
-            <Text style={styles.badgeText}>
-              {status}
+            <Text style={styles.iconText}>☰</Text>
+          </TouchableOpacity>
+
+          <View style={styles.headerTitleWrap}>
+            <Text style={styles.chatTitleText} numberOfLines={1}>
+              {activeConv?.title || 'Chat'}
             </Text>
+            <TouchableOpacity onPress={() => setRegistryOpen(true)}>
+              <Text style={styles.modelSubtext}>
+                {llm.getLoadedModel()?.name || 'No Model Loaded ▾'}
+              </Text>
+            </TouchableOpacity>
           </View>
+
+          <TouchableOpacity
+              style={styles.iconBtn}
+              onPress={() => setRegistryOpen(true)}
+          >
+            <Text style={styles.iconText}>⚙</Text>
+          </TouchableOpacity>
         </View>
 
-        {/* Model Controls */}
-        <View style={styles.card}>
-          <Text style={styles.metricLabel}>
-            MODEL
-          </Text>
+        {/* Inline Gated Loading Progress Bar */}
+        {status === 'LOADING' && (
+            <View style={styles.loadingBanner}>
+              <ActivityIndicator size="small" color="#38BDF8" />
+              <Text style={styles.loadingText}>
+                Loading Engine & Weights: {loadProgress}%
+              </Text>
+            </View>
+        )}
 
-          <Text
-              style={[
-                styles.outputText,
-                {
-                  fontSize: 12,
-                  marginTop: 4,
-                  marginBottom: 10,
-                },
+        {/* Telemetry Bar */}
+        {metrics && status !== 'LOADING' && (
+            <View style={styles.telemetryBar}>
+              <Text style={styles.telemetryText}>
+                Speed: {metrics.tokensPerSecond} t/s | TTFT: {metrics.ttftMs}ms | Tokens: {metrics.totalTokens}
+              </Text>
+            </View>
+        )}
+
+        {/* Chat Messages and Input Container */}
+        <KeyboardAvoidingView
+            style={styles.flexFill}
+            behavior={Platform.OS === 'ios' ? 'padding' : 'height'}
+            keyboardVerticalOffset={Platform.OS === 'ios' ? 0 : 20}
+        >
+          <FlatList
+              ref={flatListRef}
+              data={messages}
+              keyExtractor={(item) => item.id}
+              style={styles.messageList}
+              contentContainerStyle={[
+                styles.messageListContent,
+                { paddingBottom: 16 },
               ]}
-              numberOfLines={2}
+              onContentSizeChange={() =>
+                  flatListRef.current?.scrollToEnd({ animated: true })
+              }
+              renderItem={({ item }) => (
+                  <View
+                      style={[
+                        styles.bubble,
+                        item.role === 'user' ? styles.userBubble : styles.assistantBubble,
+                      ]}
+                  >
+                    <Text style={styles.bubbleText}>{item.content}</Text>
+                  </View>
+              )}
+              ListFooterComponent={
+                streamingContent ? (
+                    <View style={[styles.bubble, styles.assistantBubble]}>
+                      <Text style={styles.bubbleText}>{streamingContent}</Text>
+                    </View>
+                ) : null
+              }
+          />
+
+          {/* Dynamic Prompt Box */}
+          <View
+              style={[
+                styles.inputContainer,
+                { paddingBottom: Math.max(insets.bottom, 10) },
+              ]}
           >
-            {model
-                ? model.originalName
-                : 'No GGUF model selected'}
-          </Text>
+            <TextInput
+                style={styles.textInput}
+                placeholder={
+                  status === 'READY'
+                      ? 'Type message...'
+                      : status === 'LOADING'
+                          ? `Loading Model (${loadProgress}%)...`
+                          : 'Select/Load a model to chat...'
+                }
+                placeholderTextColor="#64748B"
+                value={prompt}
+                onChangeText={setPrompt}
+                editable={status === 'READY'}
+                multiline
+            />
 
-          <View style={styles.actionRow}>
-            {status === 'UNLOADED' ||
-            status === 'ERROR' ? (
+            {status === 'GENERATING' ? (
                 <TouchableOpacity
-                    style={styles.primaryButton}
-                    onPress={handlePickModel}
+                    style={styles.stopBtn}
+                    onPress={() => llm.stopCompletion()}
                 >
-                  <Text style={styles.buttonText}>
-                    Select GGUF Model
-                  </Text>
+                  <Text style={styles.btnText}>Stop</Text>
                 </TouchableOpacity>
-            ) : status === 'READY' ? (
-                <View
-                    style={{
-                      flexDirection: 'row',
-                      gap: 8,
-                    }}
-                >
-                  <TouchableOpacity
-                      style={styles.primaryButton}
-                      onPress={handlePickModel}
-                  >
-                    <Text style={styles.buttonText}>
-                      Change Model
-                    </Text>
-                  </TouchableOpacity>
-
-                  <TouchableOpacity
-                      style={styles.dangerButton}
-                      onPress={handleUnloadModel}
-                  >
-                    <Text style={styles.buttonText}>
-                      Unload Model
-                    </Text>
-                  </TouchableOpacity>
-                </View>
             ) : (
                 <TouchableOpacity
                     style={[
-                      styles.dangerButton,
-                      styles.disabledButton,
+                      styles.sendBtn,
+                      (!prompt.trim() || status !== 'READY') && styles.disabledBtn,
                     ]}
-                    disabled
+                    onPress={handleSendMessage}
+                    disabled={!prompt.trim() || status !== 'READY'}
                 >
-                  <Text style={styles.buttonText}>
-                    {status === 'LOADING'
-                        ? 'Loading...'
-                        : 'Generating...'}
-                  </Text>
+                  <Text style={styles.btnText}>Send</Text>
                 </TouchableOpacity>
             )}
           </View>
+        </KeyboardAvoidingView>
 
-          {status === 'LOADING' && (
-              <View style={styles.loadingContainer}>
-                <ActivityIndicator
-                    color="#38BDF8"
-                    size="small"
-                />
+        {/* Drawers & Modals */}
+        <ConversationDrawer
+            visible={isDrawerOpen}
+            conversations={conversations}
+            activeId={activeConv?.id || null}
+            onSelect={switchConversation}
+            onNew={handleNewConversation}
+            onDelete={handleDeleteConversation}
+            onClose={() => setDrawerOpen(false)}
+        />
 
-                <Text style={styles.loadingText}>
-                  Initializing Context & Offloading:{' '}
-                  {loadProgress}%
-                </Text>
-              </View>
-          )}
-        </View>
-
-        {/* Telemetry Dashboard */}
-        <View style={styles.metricsContainer}>
-          <View style={styles.metricBox}>
-            <Text style={styles.metricLabel}>
-              Throughput
-            </Text>
-
-            <Text style={styles.metricValue}>
-              {metrics
-                  ? `${metrics.tokensPerSecond} t/s`
-                  : '--'}
-            </Text>
-          </View>
-
-          <View style={styles.metricBox}>
-            <Text style={styles.metricLabel}>
-              TTFT
-            </Text>
-
-            <Text style={styles.metricValue}>
-              {metrics
-                  ? `${metrics.ttftMs} ms`
-                  : '--'}
-            </Text>
-          </View>
-
-          <View style={styles.metricBox}>
-            <Text style={styles.metricLabel}>
-              Tokens
-            </Text>
-
-            <Text style={styles.metricValue}>
-              {metrics
-                  ? `${metrics.totalTokens}`
-                  : '--'}
-            </Text>
-          </View>
-        </View>
-
-        {/* Output Console */}
-        <View style={styles.outputCard}>
-          <ScrollView
-              ref={scrollViewRef}
-              style={styles.outputScroll}
-              contentContainerStyle={
-                styles.outputScrollContent
+        <ModelRegistryModal
+            visible={isRegistryOpen}
+            onClose={() => setRegistryOpen(false)}
+            onSelectModel={(mod) => {
+              if (activeConv) {
+                ensureModelLoaded(mod.id);
               }
-          >
-            <Text style={styles.outputText}>
-              {output ||
-                  (status === 'READY'
-                      ? 'Ready for inference. Select a prompt below or type your own.'
-                      : 'Model not loaded.')}
-            </Text>
-          </ScrollView>
-        </View>
-
-        {/* Preset Chips */}
-        <View style={styles.presetsContainer}>
-          <ScrollView
-              horizontal
-              showsHorizontalScrollIndicator={false}
-          >
-            {PRESET_PROMPTS.map((p, idx) => (
-                <TouchableOpacity
-                    key={idx}
-                    style={styles.chip}
-                    onPress={() => setPrompt(p)}
-                    disabled={status !== 'READY'}
-                >
-                  <Text
-                      style={styles.chipText}
-                      numberOfLines={1}
-                  >
-                    {p}
-                  </Text>
-                </TouchableOpacity>
-            ))}
-          </ScrollView>
-        </View>
-
-        {/* Input Bar */}
-        <View style={styles.inputContainer}>
-          <TextInput
-              style={styles.textInput}
-              placeholder="Enter prompt..."
-              placeholderTextColor="#64748B"
-              value={prompt}
-              onChangeText={setPrompt}
-              editable={status === 'READY'}
-              multiline
-          />
-
-          {status === 'GENERATING' ? (
-              <TouchableOpacity
-                  style={styles.stopButton}
-                  onPress={handleStop}
-              >
-                <Text style={styles.buttonText}>
-                  Stop
-                </Text>
-              </TouchableOpacity>
-          ) : (
-              <TouchableOpacity
-                  style={[
-                    styles.sendButton,
-                    (!prompt.trim() ||
-                        status !== 'READY') &&
-                    styles.disabledButton,
-                  ]}
-                  onPress={handleSend}
-                  disabled={
-                      !prompt.trim() ||
-                      status !== 'READY'
-                  }
-              >
-                <Text style={styles.buttonText}>
-                  Send
-                </Text>
-              </TouchableOpacity>
-          )}
-        </View>
+            }}
+        />
       </View>
   );
 }
 
-
 const styles = StyleSheet.create({
-  container: {
-    flex: 1,
-    backgroundColor: '#0F172A',
-    paddingHorizontal: 16,
-    paddingTop: 12,
-  },
-  header: {
-    flexDirection: 'row',
-    justifyContent: 'space-between',
-    alignItems: 'center',
-    marginBottom: 12,
-  },
-  title: {
-    color: '#F8FAFC',
-    fontSize: 18,
-    fontWeight: '700',
-  },
-  subtitle: {
-    color: '#64748B',
-    fontSize: 12,
-  },
-  badge: {
-    paddingHorizontal: 10,
-    paddingVertical: 4,
-    borderRadius: 6,
-  },
-  badgeText: {
-    color: '#FFFFFF',
-    fontWeight: '700',
-    fontSize: 11,
-  },
-  card: {
-    backgroundColor: '#1E293B',
-    borderRadius: 8,
-    padding: 12,
-    marginBottom: 12,
-  },
-  pathInput: {
-    backgroundColor: '#0F172A',
-    color: '#E2E8F0',
-    borderRadius: 6,
-    paddingHorizontal: 10,
-    paddingVertical: 8,
-    fontSize: 12,
-    fontFamily: 'monospace',
-    marginBottom: 8,
-  },
-  actionRow: {
-    flexDirection: 'row',
-    justifyContent: 'flex-end',
-  },
-  primaryButton: {
-    backgroundColor: '#0284C7',
-    paddingVertical: 8,
-    paddingHorizontal: 16,
-    borderRadius: 6,
-  },
-  dangerButton: {
-    backgroundColor: '#DC2626',
-    paddingVertical: 8,
-    paddingHorizontal: 16,
-    borderRadius: 6,
-  },
-  disabledButton: {
-    opacity: 0.5,
-  },
-  buttonText: {
-    color: '#FFFFFF',
-    fontWeight: '600',
-    fontSize: 13,
-  },
-  loadingContainer: {
+  screen: { flex: 1, backgroundColor: '#0F172A' },
+  flexFill: { flex: 1 },
+  topBar: {
+    height: 52,
     flexDirection: 'row',
     alignItems: 'center',
-    marginTop: 8,
-    gap: 8,
+    paddingHorizontal: 16,
+    borderBottomWidth: 1,
+    borderBottomColor: '#1E293B',
   },
-  loadingText: {
-    color: '#38BDF8',
-    fontSize: 12,
-  },
-  metricsContainer: {
+  headerTitleWrap: { flex: 1, alignItems: 'center' },
+  chatTitleText: { color: '#F8FAFC', fontSize: 16, fontWeight: '700' },
+  modelSubtext: { color: '#38BDF8', fontSize: 12, marginTop: 2 },
+  iconBtn: { padding: 8 },
+  iconText: { color: '#94A3B8', fontSize: 20 },
+  loadingBanner: {
     flexDirection: 'row',
-    justifyContent: 'space-between',
-    marginBottom: 12,
-    gap: 8,
-  },
-  metricBox: {
-    flex: 1,
-    backgroundColor: '#1E293B',
-    padding: 10,
-    borderRadius: 8,
     alignItems: 'center',
-  },
-  metricLabel: {
-    color: '#94A3B8',
-    fontSize: 11,
-    marginBottom: 2,
-    textTransform: 'uppercase',
-  },
-  metricValue: {
-    color: '#38BDF8',
-    fontSize: 16,
-    fontWeight: '700',
-  },
-  outputCard: {
-    flex: 1,
-    backgroundColor: '#1E293B',
-    borderRadius: 8,
-    padding: 12,
-    marginBottom: 8,
-  },
-  outputScroll: {
-    flex: 1,
-  },
-  outputScrollContent: {
-    flexGrow: 1,
-  },
-  outputText: {
-    color: '#E2E8F0',
-    fontSize: 14,
-    lineHeight: 20,
-  },
-  presetsContainer: {
-    marginBottom: 8,
-    height: 36,
-  },
-  chip: {
-    backgroundColor: '#334155',
-    paddingHorizontal: 12,
-    paddingVertical: 6,
-    borderRadius: 16,
-    marginRight: 8,
     justifyContent: 'center',
-    maxWidth: 220,
+    backgroundColor: '#1E293B',
+    paddingVertical: 8,
+    gap: 8,
   },
-  chipText: {
-    color: '#CBD5E1',
-    fontSize: 12,
+  loadingText: { color: '#38BDF8', fontSize: 12, fontWeight: '600' },
+  telemetryBar: {
+    backgroundColor: '#0284C720',
+    paddingVertical: 4,
+    alignItems: 'center',
   },
+  telemetryText: { color: '#38BDF8', fontSize: 11, fontFamily: 'monospace' },
+  messageList: { flex: 1, paddingHorizontal: 16 },
+  messageListContent: { paddingTop: 16 },
+  bubble: {
+    maxWidth: '85%',
+    padding: 12,
+    borderRadius: 12,
+    marginBottom: 10,
+  },
+  userBubble: {
+    backgroundColor: '#2563EB',
+    alignSelf: 'flex-end',
+    borderBottomRightRadius: 2,
+  },
+  assistantBubble: {
+    backgroundColor: '#1E293B',
+    alignSelf: 'flex-start',
+    borderBottomLeftRadius: 2,
+  },
+  bubbleText: { color: '#F8FAFC', fontSize: 14, lineHeight: 20 },
   inputContainer: {
     flexDirection: 'row',
     alignItems: 'center',
-    marginBottom: 12,
+    paddingHorizontal: 12,
+    paddingTop: 8,
+    backgroundColor: '#0F172A',
+    borderTopWidth: 1,
+    borderTopColor: '#1E293B',
     gap: 8,
   },
   textInput: {
@@ -819,20 +432,22 @@ const styles = StyleSheet.create({
     color: '#F8FAFC',
     borderRadius: 8,
     paddingHorizontal: 12,
-    paddingVertical: 10,
+    paddingVertical: 8,
     fontSize: 14,
-    maxHeight: 90,
+    maxHeight: 100,
   },
-  sendButton: {
+  sendBtn: {
     backgroundColor: '#2563EB',
-    paddingVertical: 12,
-    paddingHorizontal: 18,
+    paddingVertical: 10,
+    paddingHorizontal: 16,
     borderRadius: 8,
   },
-  stopButton: {
+  stopBtn: {
     backgroundColor: '#DC2626',
-    paddingVertical: 12,
-    paddingHorizontal: 18,
+    paddingVertical: 10,
+    paddingHorizontal: 16,
     borderRadius: 8,
   },
+  disabledBtn: { opacity: 0.4 },
+  btnText: { color: '#FFFFFF', fontWeight: '600', fontSize: 13 },
 });
