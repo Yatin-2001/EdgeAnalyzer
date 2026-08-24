@@ -14,22 +14,19 @@ import {
 } from 'react-native';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 
-import {
-  LLMService,
-  LLMStatus,
-  PerformanceMetrics,
-} from '@/src/services/LLMService';
-import { ModelManager, ModelInfo } from '@/src/services/ModelManager';
+import { LLMService, LLMStatus, PerformanceMetrics } from '@/src/services/LLMService';
+import { ModelManager } from '@/src/services/ModelManager';
 import { ContextManager } from '@/src/services/ContextManager';
+import { EmbeddingService } from '@/src/services/EmbeddingService';
+import { SemanticMemoryService } from '@/src/services/SemanticMemoryService';
 import {
   getAllConversations,
-  getConversationById,
   createConversation,
   deleteConversation,
   getMessagesByConversation,
   insertMessage,
   updateConversationTitle,
-  getDefaultModel,
+  getDefaultChatModel,
   getModelById,
   ConversationRecord,
   MessageRecord,
@@ -37,6 +34,9 @@ import {
 } from '@/src/database/repository';
 import { ModelRegistryModal } from '@/src/components/ModelRegistryModal';
 import { ConversationDrawer } from '@/src/components/ConversationDrawer';
+import { ToolOrchestrator } from '@/src/services/ToolOrchestrator';
+
+
 
 export default function ChatScreen() {
   const [conversations, setConversations] = useState<ConversationRecord[]>([]);
@@ -55,14 +55,20 @@ export default function ChatScreen() {
   const insets = useSafeAreaInsets();
   const llm = useRef(LLMService.getInstance()).current;
   const modelManager = useRef(ModelManager.getInstance()).current;
+  const embeddingService = useRef(EmbeddingService.getInstance()).current;
+  const memoryService = useRef(SemanticMemoryService.getInstance()).current;
   const flatListRef = useRef<FlatList>(null);
 
-  // Initialize DB & load latest conversation
+  const toolOrchestrator = useRef(ToolOrchestrator.getInstance()).current;
+
   useEffect(() => {
     (async () => {
+      // 1. Initialize dedicated embedding engine in the background
+      await embeddingService.initialize();
+
+      // 2. Load conversations and active chat session
       const allConvs = await getAllConversations();
       setConversations(allConvs);
-
       if (allConvs.length > 0) {
         await switchConversation(allConvs[0]);
       } else {
@@ -72,7 +78,7 @@ export default function ChatScreen() {
 
     return () => {
       llm.unloadModel().catch(() => {});
-      modelManager.deleteWorkingCopy().catch(() => {});
+      modelManager.deleteWorkingCopy('chat').catch(() => {});
     };
   }, []);
 
@@ -85,11 +91,19 @@ export default function ChatScreen() {
   };
 
   const handleNewConversation = async () => {
-    const defaultMod = await getDefaultModel();
+    const defaultMod = await getDefaultChatModel();
     const created = await createConversation('New Chat', defaultMod?.id || null);
     setConversations((prev) => [created, ...prev]);
     await switchConversation(created);
     setDrawerOpen(false);
+  };
+
+  const handleRenameConversation = async (id: string, newTitle: string) => {
+    await updateConversationTitle(id, newTitle, true);
+    setConversations(await getAllConversations());
+    if (activeConv?.id === id) {
+      setActiveConv((prev) => (prev ? { ...prev, title: newTitle, is_custom_title: 1 } : null));
+    }
   };
 
   const handleDeleteConversation = async (id: string) => {
@@ -105,9 +119,6 @@ export default function ChatScreen() {
     }
   };
 
-  /**
-   * Gated model loading logic.
-   */
   const ensureModelLoaded = async (targetModelId: string | null) => {
     try {
       let selectedRecord: ModelRecord | null = null;
@@ -115,7 +126,7 @@ export default function ChatScreen() {
         selectedRecord = await getModelById(targetModelId);
       }
       if (!selectedRecord) {
-        selectedRecord = await getDefaultModel();
+        selectedRecord = await getDefaultChatModel();
       }
 
       if (!selectedRecord) {
@@ -123,7 +134,7 @@ export default function ChatScreen() {
         return;
       }
 
-      const activeModelInfo = modelManager.getCurrentModel();
+      const activeModelInfo = modelManager.getCurrentModel('chat');
       if (
           activeModelInfo?.originalUri === selectedRecord.original_uri &&
           llm.isReady()
@@ -135,8 +146,11 @@ export default function ChatScreen() {
       setStatus('LOADING');
       setLoadProgress(0);
 
-      const prepared = await modelManager.prepareModelFromRecord(selectedRecord);
-      if (!prepared.workingUri) throw new Error('Working model copy missing.');
+      const prepared = await modelManager.prepareModelFromRecord(
+          selectedRecord,
+          'chat'
+      );
+      if (!prepared.workingUri) throw new Error('Working copy missing.');
 
       await llm.loadModel(
           prepared.workingUri,
@@ -147,10 +161,7 @@ export default function ChatScreen() {
       setStatus(llm.getStatus());
     } catch (error) {
       setStatus('ERROR');
-      Alert.alert(
-          'Model Load Failed',
-          error instanceof Error ? error.message : String(error)
-      );
+      Alert.alert('Model Load Failed', error instanceof Error ? error.message : String(error));
     }
   };
 
@@ -164,10 +175,26 @@ export default function ChatScreen() {
     const updatedMessages = [...messages, userMsg];
     setMessages(updatedMessages);
 
-    // Build context window
+    // 1. Cross-Session Memory Recall
+    const memoryContext = await memoryService.retrieveRelevantMemory(
+        userText,
+        activeConv.id
+    );
+
+    const baseSystem =
+        (activeConv.system_prompt ||
+            'You are a helpful, concise AI assistant running locally on-device.') +
+        memoryContext.formattedSystemContext;
+
+    // 2. Inject Tool Schema with Anti-Refusal System Prompt
+    const systemWithTools = toolOrchestrator.formatSystemPromptWithTools(
+        baseSystem,
+        userText // Triggers dynamic temporal anchor only when relative time is requested
+    );
+
     const formattedPrompt = ContextManager.buildSlidingContextPrompt(
         updatedMessages,
-        activeConv.system_prompt || undefined,
+        systemWithTools,
         'llama3'
     );
 
@@ -175,13 +202,27 @@ export default function ChatScreen() {
     setStreamingContent('');
 
     try {
-      const { fullText, metrics: genMetrics } = await llm.streamCompletion(
+      // In handleSendMessage in app/index.tsx:
+      const { fullText, metrics: genMetrics } = await toolOrchestrator.executeAgentLoop(
           formattedPrompt,
+          userText, // Enables fallback intent-gating
           {
             onToken: (token) => {
               setStreamingContent((prev) => prev + token);
             },
             onMetrics: (m) => setMetrics(m),
+            onToolCallDetected: (toolName, _, step) => {
+              setStreamingContent(
+                  (prev) => prev + `⚙️ [Step ${step}] Executing tool: ${toolName}...\n`
+              );
+            },
+            onToolExecutionCompleted: (toolName, res, step) => {
+              setStreamingContent(
+                  (prev) =>
+                      prev +
+                      `✓ [Step ${step}] ${toolName} completed (${res.executionTimeMs}ms)\n\n`
+              );
+            },
           }
       );
 
@@ -196,13 +237,24 @@ export default function ChatScreen() {
       setStreamingContent('');
       setStatus(llm.getStatus());
 
-      // Auto-title generation after the first turn
-      if (messages.length === 0) {
-        const title = await llm.generateTitle(userText);
-        await updateConversationTitle(activeConv.id, title);
-        setActiveConv((prev) => (prev ? { ...prev, title } : null));
-        setConversations(await getAllConversations());
+      // Background title update & memory indexing
+      if (activeConv.is_custom_title === 0) {
+        const turnCount = updatedMessages.filter((m) => m.role === 'user').length;
+        if (turnCount === 1 || turnCount === 3) {
+          const autoTitle = await llm.generateTitle(userText);
+          await updateConversationTitle(activeConv.id, autoTitle, false);
+          setActiveConv((prev) => (prev ? { ...prev, title: autoTitle } : null));
+          setConversations(await getAllConversations());
+        }
       }
+
+      memoryService.ingestTurnAsync(
+          userMsg.id,
+          assistantMsg.id,
+          activeConv.id,
+          userText,
+          fullText
+      );
     } catch (error) {
       setStatus(llm.getStatus());
       Alert.alert('Inference Error', String(error));
@@ -213,7 +265,7 @@ export default function ChatScreen() {
       <View style={[styles.screen, { paddingTop: insets.top }]}>
         <StatusBar barStyle="light-content" backgroundColor="#0F172A" />
 
-        {/* Top Navigation Bar */}
+        {/* Top Header */}
         <View style={styles.topBar}>
           <TouchableOpacity
               style={styles.iconBtn}
@@ -241,7 +293,7 @@ export default function ChatScreen() {
           </TouchableOpacity>
         </View>
 
-        {/* Inline Gated Loading Progress Bar */}
+        {/* Gated Loader Banner */}
         {status === 'LOADING' && (
             <View style={styles.loadingBanner}>
               <ActivityIndicator size="small" color="#38BDF8" />
@@ -260,7 +312,7 @@ export default function ChatScreen() {
             </View>
         )}
 
-        {/* Chat Messages and Input Container */}
+        {/* Message Stream with Keyboard-Aware Input Box */}
         <KeyboardAvoidingView
             style={styles.flexFill}
             behavior={Platform.OS === 'ios' ? 'padding' : 'height'}
@@ -297,11 +349,10 @@ export default function ChatScreen() {
               }
           />
 
-          {/* Dynamic Prompt Box */}
           <View
               style={[
                 styles.inputContainer,
-                { paddingBottom: Math.max(insets.bottom, 10) },
+                { paddingBottom: insets.bottom },
               ]}
           >
             <TextInput
@@ -342,7 +393,6 @@ export default function ChatScreen() {
           </View>
         </KeyboardAvoidingView>
 
-        {/* Drawers & Modals */}
         <ConversationDrawer
             visible={isDrawerOpen}
             conversations={conversations}
@@ -350,13 +400,14 @@ export default function ChatScreen() {
             onSelect={switchConversation}
             onNew={handleNewConversation}
             onDelete={handleDeleteConversation}
+            onRename={handleRenameConversation}
             onClose={() => setDrawerOpen(false)}
         />
 
         <ModelRegistryModal
             visible={isRegistryOpen}
             onClose={() => setRegistryOpen(false)}
-            onSelectModel={(mod) => {
+            onSelectChatModel={(mod) => {
               if (activeConv) {
                 ensureModelLoaded(mod.id);
               }

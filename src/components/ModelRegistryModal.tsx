@@ -14,30 +14,36 @@ import ModelFile from '../../modules/model-file/src/ModelFileModule';
 import {
     getAllModels,
     insertModel,
-    setDefaultModel,
+    setDefaultChatModel,
+    lockDedicatedEmbeddingModel,
     deleteModel,
+    getEmbeddingModel,
     ModelRecord,
 } from '../database/repository';
+import { EmbeddingService } from '../services/EmbeddingService';
 
 interface Props {
     visible: boolean;
     onClose: () => void;
-    onSelectModel?: (model: ModelRecord) => void;
+    onSelectChatModel?: (model: ModelRecord) => void;
 }
 
 export const ModelRegistryModal: React.FC<Props> = ({
                                                         visible,
                                                         onClose,
-                                                        onSelectModel,
+                                                        onSelectChatModel,
                                                     }) => {
     const [models, setModels] = useState<ModelRecord[]>([]);
+    const [embeddingModel, setEmbeddingModel] = useState<ModelRecord | null>(null);
     const [loading, setLoading] = useState(false);
 
     const loadRegistry = async () => {
         setLoading(true);
         try {
             const records = await getAllModels();
+            const currentEmb = await getEmbeddingModel();
             setModels(records);
+            setEmbeddingModel(currentEmb);
         } finally {
             setLoading(false);
         }
@@ -47,7 +53,7 @@ export const ModelRegistryModal: React.FC<Props> = ({
         if (visible) loadRegistry();
     }, [visible]);
 
-    const handleAddModel = async () => {
+    const handleRegisterModel = async () => {
         try {
             const pickedFile = await File.pickFileAsync(undefined, '*/*');
             if (!pickedFile || !(pickedFile instanceof File)) return;
@@ -56,7 +62,7 @@ export const ModelRegistryModal: React.FC<Props> = ({
             const originalName = metadata.name?.trim();
 
             if (!originalName || !originalName.toLowerCase().endsWith('.gguf')) {
-                Alert.alert('Invalid Model', 'Please select a valid .gguf file.');
+                Alert.alert('Invalid Model', 'Please select a valid GGUF binary.');
                 return;
             }
 
@@ -70,9 +76,33 @@ export const ModelRegistryModal: React.FC<Props> = ({
         }
     };
 
-    const handleSetDefault = async (id: string) => {
-        await setDefaultModel(id);
+    const handleSetDefaultChat = async (id: string) => {
+        await setDefaultChatModel(id);
         await loadRegistry();
+    };
+
+    const handleLockAsEmbedding = (record: ModelRecord) => {
+        Alert.alert(
+            'Lock Dedicated Embedding Engine',
+            `Set "${record.original_name}" as the permanent embedding engine?\n\nWARNING: Once set, all cross-session vector indexes will be permanently keyed to this model and it CANNOT be changed.`,
+            [
+                { text: 'Cancel', style: 'cancel' },
+                {
+                    text: 'Confirm & Lock Engine',
+                    style: 'destructive',
+                    onPress: async () => {
+                        try {
+                            await lockDedicatedEmbeddingModel(record.id);
+                            await EmbeddingService.getInstance().initialize();
+                            await loadRegistry();
+                            Alert.alert('Success', 'Dedicated Embedding Engine initialized and locked.');
+                        } catch (err) {
+                            Alert.alert('Lock Failed', String(err));
+                        }
+                    },
+                },
+            ]
+        );
     };
 
     const handleDelete = (id: string, name: string) => {
@@ -85,8 +115,12 @@ export const ModelRegistryModal: React.FC<Props> = ({
                     text: 'Remove',
                     style: 'destructive',
                     onPress: async () => {
-                        await deleteModel(id);
-                        await loadRegistry();
+                        try {
+                            await deleteModel(id);
+                            await loadRegistry();
+                        } catch (err) {
+                            Alert.alert('Cannot Delete', String(err));
+                        }
                     },
                 },
             ]
@@ -105,13 +139,25 @@ export const ModelRegistryModal: React.FC<Props> = ({
             <View style={styles.modalOverlay}>
                 <View style={styles.modalContainer}>
                     <View style={styles.header}>
-                        <Text style={styles.headerTitle}>Model Registry</Text>
+                        <Text style={styles.headerTitle}>Engine & Model Registry</Text>
                         <TouchableOpacity onPress={onClose} style={styles.closeBtn}>
                             <Text style={styles.closeBtnText}>Done</Text>
                         </TouchableOpacity>
                     </View>
 
-                    <TouchableOpacity style={styles.addBtn} onPress={handleAddModel}>
+                    {/* Embedding Status Banner */}
+                    <View style={styles.embedBanner}>
+                        <Text style={styles.embedBannerTitle}>
+                            {embeddingModel ? '🔒 Permanent Embedding Engine' : '⚠️ No Embedding Engine Set'}
+                        </Text>
+                        <Text style={styles.embedBannerDesc}>
+                            {embeddingModel
+                                ? `${embeddingModel.original_name} (${formatSize(embeddingModel.size_bytes)})`
+                                : 'Select a model below to permanently lock as your dedicated embedding engine.'}
+                        </Text>
+                    </View>
+
+                    <TouchableOpacity style={styles.addBtn} onPress={handleRegisterModel}>
                         <Text style={styles.addBtnText}>+ Register GGUF Model</Text>
                     </TouchableOpacity>
 
@@ -130,36 +176,49 @@ export const ModelRegistryModal: React.FC<Props> = ({
                                         </Text>
                                         <Text style={styles.modelMeta}>
                                             {formatSize(item.size_bytes)}{' '}
-                                            {item.is_default === 1 && ' • Default'}
+                                            {item.is_embedding === 1 && ' • [Dedicated Embedding]'}
+                                            {item.is_default === 1 && ' • [Default Chat]'}
                                         </Text>
                                     </View>
 
                                     <View style={styles.cardActions}>
-                                        {onSelectModel && (
-                                            <TouchableOpacity
-                                                style={styles.selectBtn}
-                                                onPress={() => {
-                                                    onSelectModel(item);
-                                                    onClose();
-                                                }}
-                                            >
-                                                <Text style={styles.actionText}>Select</Text>
-                                            </TouchableOpacity>
+                                        {item.is_embedding === 0 && (
+                                            <>
+                                                {onSelectChatModel && (
+                                                    <TouchableOpacity
+                                                        style={styles.selectBtn}
+                                                        onPress={() => {
+                                                            onSelectChatModel(item);
+                                                            onClose();
+                                                        }}
+                                                    >
+                                                        <Text style={styles.actionText}>Chat</Text>
+                                                    </TouchableOpacity>
+                                                )}
+                                                {item.is_default === 0 && (
+                                                    <TouchableOpacity
+                                                        style={styles.defaultBtn}
+                                                        onPress={() => handleSetDefaultChat(item.id)}
+                                                    >
+                                                        <Text style={styles.actionText}>Default</Text>
+                                                    </TouchableOpacity>
+                                                )}
+                                                {!embeddingModel && (
+                                                    <TouchableOpacity
+                                                        style={styles.embedLockBtn}
+                                                        onPress={() => handleLockAsEmbedding(item)}
+                                                    >
+                                                        <Text style={styles.actionText}>Lock as Embed</Text>
+                                                    </TouchableOpacity>
+                                                )}
+                                                <TouchableOpacity
+                                                    style={styles.deleteBtn}
+                                                    onPress={() => handleDelete(item.id, item.original_name)}
+                                                >
+                                                    <Text style={styles.deleteText}>Delete</Text>
+                                                </TouchableOpacity>
+                                            </>
                                         )}
-                                        {item.is_default === 0 && (
-                                            <TouchableOpacity
-                                                style={styles.defaultBtn}
-                                                onPress={() => handleSetDefault(item.id)}
-                                            >
-                                                <Text style={styles.actionText}>Make Default</Text>
-                                            </TouchableOpacity>
-                                        )}
-                                        <TouchableOpacity
-                                            style={styles.deleteBtn}
-                                            onPress={() => handleDelete(item.id, item.original_name)}
-                                        >
-                                            <Text style={styles.deleteText}>Delete</Text>
-                                        </TouchableOpacity>
                                     </View>
                                 </View>
                             )}
@@ -179,7 +238,7 @@ const styles = StyleSheet.create({
     },
     modalContainer: {
         backgroundColor: '#0F172A',
-        height: '75%',
+        height: '80%',
         borderTopLeftRadius: 16,
         borderTopRightRadius: 16,
         padding: 16,
@@ -188,11 +247,21 @@ const styles = StyleSheet.create({
         flexDirection: 'row',
         justifyContent: 'space-between',
         alignItems: 'center',
-        marginBottom: 16,
+        marginBottom: 12,
     },
     headerTitle: { color: '#F8FAFC', fontSize: 18, fontWeight: '700' },
     closeBtn: { padding: 4 },
     closeBtnText: { color: '#38BDF8', fontSize: 16, fontWeight: '600' },
+    embedBanner: {
+        backgroundColor: '#1E293B',
+        padding: 12,
+        borderRadius: 8,
+        borderLeftWidth: 4,
+        borderLeftColor: '#38BDF8',
+        marginBottom: 12,
+    },
+    embedBannerTitle: { color: '#F8FAFC', fontSize: 13, fontWeight: '700' },
+    embedBannerDesc: { color: '#94A3B8', fontSize: 11, marginTop: 2 },
     addBtn: {
         backgroundColor: '#0284C7',
         padding: 12,
@@ -211,26 +280,33 @@ const styles = StyleSheet.create({
     modelMeta: { color: '#94A3B8', fontSize: 12, marginTop: 4 },
     cardActions: {
         flexDirection: 'row',
-        gap: 8,
+        gap: 6,
         marginTop: 10,
         justifyContent: 'flex-end',
+        flexWrap: 'wrap',
     },
     selectBtn: {
         backgroundColor: '#2563EB',
         paddingVertical: 6,
-        paddingHorizontal: 12,
+        paddingHorizontal: 10,
         borderRadius: 6,
     },
     defaultBtn: {
         backgroundColor: '#334155',
         paddingVertical: 6,
-        paddingHorizontal: 12,
+        paddingHorizontal: 10,
+        borderRadius: 6,
+    },
+    embedLockBtn: {
+        backgroundColor: '#059669',
+        paddingVertical: 6,
+        paddingHorizontal: 10,
         borderRadius: 6,
     },
     deleteBtn: {
         backgroundColor: '#EF444420',
         paddingVertical: 6,
-        paddingHorizontal: 12,
+        paddingHorizontal: 10,
         borderRadius: 6,
     },
     actionText: { color: '#FFFFFF', fontSize: 12, fontWeight: '500' },

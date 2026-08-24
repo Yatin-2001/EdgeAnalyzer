@@ -18,9 +18,9 @@
         "backgroundColor": "#0F172A"
       },
       "permissions": [
-        "android.permission.READ_EXTERNAL_STORAGE",
-        "android.permission.WRITE_EXTERNAL_STORAGE",
-        "android.permission.MANAGE_EXTERNAL_STORAGE"
+        "android.permission.ACCESS_COARSE_LOCATION",
+        "android.permission.ACCESS_FINE_LOCATION",
+        "android.permission.INTERNET"
       ]
     },
     "plugins": [
@@ -31,7 +31,14 @@
           "enableVulkan": true
         }
       ],
-      "expo-sqlite"
+      "expo-sqlite",
+      [
+        "expo-location",
+        {
+          "locationAlwaysAndWhenInUsePermission": "Allow EdgeAnalyzer to access your device location for live weather and contextual tools.",
+          "locationWhenInUsePermission": "Allow EdgeAnalyzer to access your device location for live weather and contextual tools."
+        }
+      ]
     ]
   }
 }

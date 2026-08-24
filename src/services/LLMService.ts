@@ -83,7 +83,7 @@ export class LLMService {
           {
             model: normalizedPath,
             use_mlock: config.useMlock ?? true,
-            n_ctx: config.nCtx ?? 2048,
+            n_ctx: config.nCtx ?? 4096,
             n_gpu_layers: config.nGpuLayers ?? 99,
             n_threads: config.nThreads ?? 4,
             n_batch: config.nBatch ?? 512,
@@ -172,22 +172,38 @@ export class LLMService {
   }
 
   /**
-   * Fast, truncated completion for generating conversation titles.
+   * Fast, non-streaming completion for background workers and tool detection.
+   */
+  public async completeNonStreaming(
+      formattedPrompt: string,
+      maxTokens: number = 128
+  ): Promise<string> {
+    if (!this.context || this.status !== 'READY') return '';
+
+    try {
+      const res = await this.context.completion({
+        prompt: formattedPrompt,
+        n_predict: maxTokens,
+        temperature: 0.1, // Low temperature for deterministic tool calls
+        stop: ['<|eot_id|>', '<|end_of_text|>', '<|im_end|>'], // Removed '\n'
+      });
+      return res.text || '';
+    } catch (error) {
+      console.warn('[LLMService] Non-streaming completion failed:', error);
+      return '';
+    }
+  }
+
+  /**
+   * Generates a 3-5 word title for a conversation.
    */
   public async generateTitle(firstUserPrompt: string): Promise<string> {
     if (!this.context || this.status !== 'READY') return 'New Conversation';
 
     try {
       const prompt = `<|begin_of_text|><|start_header_id|>system<|end_header_id|>\n\nCreate a 3-5 word concise title for this query. Output ONLY the title text.<|eot_id|><|start_header_id|>user<|end_header_id|>\n\n${firstUserPrompt}<|eot_id|><|start_header_id|>assistant<|end_header_id|>\n\n`;
-
-      const result = await this.context.completion({
-        prompt,
-        n_predict: 16,
-        temperature: 0.3,
-        stop: ['\n', '<|eot_id|>', '<|end_of_text|>'],
-      });
-
-      const clean = result.text.replace(/["'\n]/g, '').trim();
+      const text = await this.completeNonStreaming(prompt, 16);
+      const clean = text.replace(/["'\n]/g, '').trim();
       return clean.length > 0 ? clean : 'New Conversation';
     } catch {
       return 'New Conversation';

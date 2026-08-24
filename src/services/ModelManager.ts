@@ -4,6 +4,8 @@ import ModelFile, {
 } from '../../modules/model-file/src/ModelFileModule';
 import { ModelRecord } from '../database/repository';
 
+export type ModelSlotType = 'chat' | 'embedding';
+
 export type ModelFileStatus =
     | 'NO_MODEL'
     | 'MODEL_AVAILABLE'
@@ -18,12 +20,15 @@ export interface ModelInfo {
   workingUri: string | null;
   sizeBytes: number | null;
   status: ModelFileStatus;
+  slotType: ModelSlotType;
 }
 
 export class ModelManager {
   private static instance: ModelManager;
   private readonly modelsDirectory: Directory;
-  private currentModel: ModelInfo | null = null;
+
+  private currentChatModel: ModelInfo | null = null;
+  private currentEmbeddingModel: ModelInfo | null = null;
 
   private constructor() {
     this.modelsDirectory = new Directory(Paths.document, 'models');
@@ -42,33 +47,38 @@ export class ModelManager {
     }
   }
 
-  public async prepareModelFromRecord(record: ModelRecord): Promise<ModelInfo> {
-    return this.selectModel(record.original_uri, record.original_name);
+  public async prepareModelFromRecord(
+      record: ModelRecord,
+      slotType: ModelSlotType = 'chat'
+  ): Promise<ModelInfo> {
+    return this.selectModel(record.original_uri, record.original_name, slotType);
   }
 
   public async selectModel(
       originalUri: string,
-      fallbackName?: string
+      fallbackName?: string,
+      slotType: ModelSlotType = 'chat'
   ): Promise<ModelInfo> {
-    if (!originalUri) {
-      throw new Error('No model URI was provided.');
-    }
+    if (!originalUri) throw new Error('No model URI was provided.');
 
-    // Cache check: Reuse existing working copy if identical model
+    const activeSlot =
+        slotType === 'chat' ? this.currentChatModel : this.currentEmbeddingModel;
+
+    // Cache hit: avoid re-copying if already prepared in this slot
     if (
-        this.currentModel &&
-        this.currentModel.originalUri === originalUri &&
-        this.currentModel.workingUri &&
-        this.currentModel.status === 'READY_TO_LOAD'
+        activeSlot &&
+        activeSlot.originalUri === originalUri &&
+        activeSlot.workingUri &&
+        activeSlot.status === 'READY_TO_LOAD'
     ) {
-      const workingFile = new File(this.currentModel.workingUri);
+      const workingFile = new File(activeSlot.workingUri);
       if (workingFile.exists && workingFile.size > 0) {
-        return this.currentModel;
+        return activeSlot;
       }
     }
 
-    if (this.currentModel && this.currentModel.originalUri !== originalUri) {
-      await this.deleteWorkingCopy();
+    if (activeSlot && activeSlot.originalUri !== originalUri) {
+      await this.deleteWorkingCopy(slotType);
     }
 
     let metadata: ModelFileMetadata;
@@ -80,38 +90,40 @@ export class ModelManager {
     }
 
     const originalName = metadata.name?.trim() || fallbackName;
-    if (!originalName) {
-      throw new Error('Android did not provide a valid model filename.');
+    if (!originalName || !originalName.toLowerCase().endsWith('.gguf')) {
+      throw new Error(`Invalid model: "${originalName}". Only GGUF files are supported.`);
     }
 
-    if (!originalName.toLowerCase().endsWith('.gguf')) {
-      throw new Error(`Invalid model file: "${originalName}". Only GGUF supported.`);
-    }
+    const workingFileName =
+        slotType === 'chat' ? 'chat_model.gguf' : 'embedding_model.gguf';
 
-    this.currentModel = {
+    const newModelInfo: ModelInfo = {
       originalName,
-      workingFileName: 'model.gguf',
+      workingFileName,
       originalUri,
       workingUri: null,
       sizeBytes: metadata.sizeBytes,
       status: 'MODEL_AVAILABLE',
+      slotType,
     };
 
-    return this.prepareWorkingCopy();
+    if (slotType === 'chat') {
+      this.currentChatModel = newModelInfo;
+      return this.prepareWorkingCopy(this.currentChatModel);
+    } else {
+      this.currentEmbeddingModel = newModelInfo;
+      return this.prepareWorkingCopy(this.currentEmbeddingModel);
+    }
   }
 
-  private async prepareWorkingCopy(): Promise<ModelInfo> {
-    if (!this.currentModel) {
-      throw new Error('No model has been selected.');
-    }
-
+  private async prepareWorkingCopy(modelInfo: ModelInfo): Promise<ModelInfo> {
     this.ensureModelsDirectory();
-    this.currentModel.status = 'PREPARING';
+    modelInfo.status = 'PREPARING';
 
     try {
       const destination = new File(
           this.modelsDirectory,
-          this.currentModel.workingFileName
+          modelInfo.workingFileName
       );
 
       if (destination.exists) {
@@ -119,56 +131,52 @@ export class ModelManager {
       }
 
       await ModelFile.copyContentUriToFile(
-          this.currentModel.originalUri,
+          modelInfo.originalUri,
           destination.uri
       );
 
       const workingFile = new File(destination.uri);
       if (!workingFile.exists || workingFile.size <= 0) {
-        throw new Error('Working model copy failed or file is empty.');
+        throw new Error('Working model binary copy failed or is empty.');
       }
 
       const isGGUF = await ModelFile.isGGUFFile(workingFile.uri);
       if (!isGGUF) {
         workingFile.delete();
-        throw new Error('The selected file is not a valid GGUF binary.');
+        throw new Error('The selected binary is not a valid GGUF file.');
       }
 
-      this.currentModel = {
-        ...this.currentModel,
-        workingUri: workingFile.uri,
-        sizeBytes: workingFile.size,
-        status: 'READY_TO_LOAD',
-      };
+      modelInfo.workingUri = workingFile.uri;
+      modelInfo.sizeBytes = workingFile.size;
+      modelInfo.status = 'READY_TO_LOAD';
 
-      return this.currentModel;
+      return modelInfo;
     } catch (error) {
-      this.currentModel.status = 'MODEL_AVAILABLE';
+      modelInfo.status = 'MODEL_AVAILABLE';
       throw error;
     }
   }
 
-  public getCurrentModel(): ModelInfo | null {
-    return this.currentModel;
+  public getCurrentModel(slotType: ModelSlotType = 'chat'): ModelInfo | null {
+    return slotType === 'chat' ? this.currentChatModel : this.currentEmbeddingModel;
   }
 
-  public async deleteWorkingCopy(): Promise<void> {
-    if (!this.currentModel?.workingUri) return;
+  public async deleteWorkingCopy(slotType: ModelSlotType = 'chat'): Promise<void> {
+    const model =
+        slotType === 'chat' ? this.currentChatModel : this.currentEmbeddingModel;
+    if (!model?.workingUri) return;
 
-    this.currentModel.status = 'CLEANING';
+    model.status = 'CLEANING';
     try {
-      const workingFile = new File(this.currentModel.workingUri);
+      const workingFile = new File(model.workingUri);
       if (workingFile.exists) {
         workingFile.delete();
       }
-      this.currentModel = {
-        ...this.currentModel,
-        workingUri: null,
-        status: 'MODEL_AVAILABLE',
-      };
+      model.workingUri = null;
+      model.status = 'MODEL_AVAILABLE';
     } catch (error) {
       const msg = error instanceof Error ? error.message : String(error);
-      throw new Error(`Failed to delete working model: ${msg}`);
+      throw new Error(`Failed to delete ${slotType} working copy: ${msg}`);
     }
   }
 }
