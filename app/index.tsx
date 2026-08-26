@@ -37,10 +37,12 @@ import { ConversationDrawer } from '@/src/components/ConversationDrawer';
 import { ToolOrchestrator } from '@/src/services/ToolOrchestrator';
 import { SecureStorageService, SearchProvider } from '@/src/services/SecureStorageService';
 import { SearchSettingsModal } from '@/src/components/SearchSettingsModal';
+import { StudioScreen } from '@/src/screens/StudioScreen';
 
 
 
 export default function ChatScreen() {
+  const [activeTab, setActiveTab] = useState<'chat' | 'studio'>('chat');
   const [conversations, setConversations] = useState<ConversationRecord[]>([]);
   const [activeConv, setActiveConv] = useState<ConversationRecord | null>(null);
   const [messages, setMessages] = useState<MessageRecord[]>([]);
@@ -169,16 +171,31 @@ export default function ChatScreen() {
       setStatus('LOADING');
       setLoadProgress(0);
 
+      // 1. Prepare Base Model slot
       const prepared = await modelManager.prepareModelFromRecord(
           selectedRecord,
           'chat'
       );
       if (!prepared.workingUri) throw new Error('Working copy missing.');
 
+      // 2. Prepare Companion mmproj slot if Vision Model
+      let mmprojWorkingPath: string | undefined;
+      if (selectedRecord.modality === 'vision' && selectedRecord.mmproj_uri) {
+        const mmprojInfo = await modelManager.selectModel(
+            selectedRecord.mmproj_uri,
+            selectedRecord.mmproj_filename || 'mmproj.gguf',
+            'mmproj'
+        );
+        mmprojWorkingPath = mmprojInfo.workingUri || undefined;
+      }
+
+      // 3. Load on Adreno GPU with multimodal projector attached
       await llm.loadModel(
           prepared.workingUri,
           prepared.originalName,
-          (progress) => setLoadProgress(Math.round(progress * 100))
+          (progress) => setLoadProgress(Math.round(progress * 100)),
+          { nGpuLayers: 99 },
+          mmprojWorkingPath
       );
 
       setStatus(llm.getStatus());
@@ -212,7 +229,7 @@ export default function ChatScreen() {
     // 2. Inject Tool Schema with Anti-Refusal System Prompt
     const systemWithTools = toolOrchestrator.formatSystemPromptWithTools(
         baseSystem,
-        userText // Triggers dynamic temporal anchor only when relative time is requested
+        userText
     );
 
     const formattedPrompt = ContextManager.buildSlidingContextPrompt(
@@ -225,10 +242,9 @@ export default function ChatScreen() {
     setStreamingContent('');
 
     try {
-      // In handleSendMessage in app/index.tsx:
       const { fullText, metrics: genMetrics } = await toolOrchestrator.executeAgentLoop(
           formattedPrompt,
-          userText, // Enables fallback intent-gating
+          userText,
           {
             onToken: (token) => {
               setStreamingContent((prev) => prev + token);
@@ -284,6 +300,10 @@ export default function ChatScreen() {
     }
   };
 
+  if (activeTab === 'studio') {
+    return <StudioScreen onBackToChat={() => setActiveTab('chat')} />;
+  }
+
   return (
       <View style={[styles.screen, { paddingTop: insets.top }]}>
         <StatusBar barStyle="light-content" backgroundColor="#0F172A" />
@@ -307,6 +327,14 @@ export default function ChatScreen() {
               </Text>
             </TouchableOpacity>
           </View>
+
+          {/* Switch to Studio Tab */}
+          <TouchableOpacity
+              style={styles.studioTabBtn}
+              onPress={() => setActiveTab('studio')}
+          >
+            <Text style={styles.studioTabText}>🎨 Studio</Text>
+          </TouchableOpacity>
 
           {/* Quick Search Engine Switcher Badge */}
           <TouchableOpacity
@@ -479,6 +507,13 @@ const styles = StyleSheet.create({
   headerTitleWrap: { flex: 1, alignItems: 'center' },
   chatTitleText: { color: '#F8FAFC', fontSize: 16, fontWeight: '700' },
   modelSubtext: { color: '#38BDF8', fontSize: 12, marginTop: 2 },
+  studioTabBtn: {
+    backgroundColor: '#334155',
+    paddingHorizontal: 8,
+    paddingVertical: 5,
+    borderRadius: 14,
+  },
+  studioTabText: { color: '#F8FAFC', fontSize: 11, fontWeight: '700' },
   searchPillBtn: {
     backgroundColor: '#1E293B',
     paddingHorizontal: 10,

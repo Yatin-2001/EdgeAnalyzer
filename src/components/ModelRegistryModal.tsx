@@ -9,11 +9,12 @@ import {
     Alert,
     ActivityIndicator,
 } from 'react-native';
-import { File } from 'expo-file-system';
+import * as DocumentPicker from 'expo-document-picker';
 import ModelFile from '../../modules/model-file/src/ModelFileModule';
 import {
     getAllModels,
     insertModel,
+    insertVisionModel,
     setDefaultChatModel,
     lockDedicatedEmbeddingModel,
     deleteModel,
@@ -44,6 +45,8 @@ export const ModelRegistryModal: React.FC<Props> = ({
             const currentEmb = await getEmbeddingModel();
             setModels(records);
             setEmbeddingModel(currentEmb);
+        } catch (err) {
+            console.warn('[ModelRegistry] Failed to load registry:', err);
         } finally {
             setLoading(false);
         }
@@ -53,24 +56,106 @@ export const ModelRegistryModal: React.FC<Props> = ({
         if (visible) loadRegistry();
     }, [visible]);
 
-    const handleRegisterModel = async () => {
+    // Safe DocumentPicker for Text Model (.gguf)
+    const handleRegisterTextModel = async () => {
         try {
-            const pickedFile = await File.pickFileAsync(undefined, '*/*');
-            if (!pickedFile || !(pickedFile instanceof File)) return;
+            const res = await DocumentPicker.getDocumentAsync({
+                type: '*/*',
+                copyToCacheDirectory: false,
+            });
 
-            const metadata = await ModelFile.getContentUriMetadata(pickedFile.uri);
-            const originalName = metadata.name?.trim();
+            if (res.canceled || !res.assets?.[0]) return;
+            const file = res.assets[0];
+
+            let originalName = file.name?.trim();
+            let sizeBytes = file.size ?? null;
+
+            try {
+                const metadata = await ModelFile.getContentUriMetadata(file.uri);
+                if (metadata.name) originalName = metadata.name.trim();
+                if (metadata.sizeBytes) sizeBytes = metadata.sizeBytes;
+            } catch {}
 
             if (!originalName || !originalName.toLowerCase().endsWith('.gguf')) {
-                Alert.alert('Invalid Model', 'Please select a valid GGUF binary.');
+                Alert.alert('Invalid Model', 'Please select a valid GGUF binary file.');
                 return;
             }
 
-            await insertModel(originalName, pickedFile.uri, metadata.sizeBytes);
+            await insertModel(originalName, file.uri, sizeBytes);
             await loadRegistry();
         } catch (error) {
             Alert.alert(
                 'Registration Failed',
+                error instanceof Error ? error.message : String(error)
+            );
+        }
+    };
+
+    // Safe DocumentPicker for Vision Model Pair (Base Model + mmproj)
+    const handleRegisterVisionPair = async () => {
+        try {
+            // 1. Pick Base Model
+            const baseRes = await DocumentPicker.getDocumentAsync({
+                type: '*/*',
+                copyToCacheDirectory: false,
+            });
+
+            if (baseRes.canceled || !baseRes.assets?.[0]) return;
+            const baseFile = baseRes.assets[0];
+
+            let baseName = baseFile.name?.trim();
+            let baseSize = baseFile.size ?? null;
+
+            try {
+                const meta = await ModelFile.getContentUriMetadata(baseFile.uri);
+                if (meta.name) baseName = meta.name.trim();
+                if (meta.sizeBytes) baseSize = meta.sizeBytes;
+            } catch {}
+
+            if (!baseName || !baseName.toLowerCase().endsWith('.gguf')) {
+                Alert.alert('Invalid Base Model', 'Please select a valid base .gguf model.');
+                return;
+            }
+
+            // Small delay so Android Activity lifecycle settles
+            await new Promise((resolve) => setTimeout(resolve, 350));
+
+            // 2. Pick Companion mmproj File
+            const mmprojRes = await DocumentPicker.getDocumentAsync({
+                type: '*/*',
+                copyToCacheDirectory: false,
+            });
+
+            if (mmprojRes.canceled || !mmprojRes.assets?.[0]) return;
+            const mmprojFile = mmprojRes.assets[0];
+
+            let mmprojName = mmprojFile.name?.trim();
+            let mmprojSize = mmprojFile.size ?? null;
+
+            try {
+                const meta = await ModelFile.getContentUriMetadata(mmprojFile.uri);
+                if (meta.name) mmprojName = meta.name.trim();
+                if (meta.sizeBytes) mmprojSize = meta.sizeBytes;
+            } catch {}
+
+            if (!mmprojName || !mmprojName.toLowerCase().endsWith('.gguf')) {
+                Alert.alert('Invalid Projector', 'The projector must be a valid .gguf file.');
+                return;
+            }
+
+            await insertVisionModel(
+                baseName,
+                baseFile.uri,
+                baseSize,
+                mmprojName,
+                mmprojFile.uri,
+                mmprojSize
+            );
+
+            await loadRegistry();
+        } catch (error) {
+            Alert.alert(
+                'Vision Registration Failed',
                 error instanceof Error ? error.message : String(error)
             );
         }
@@ -135,7 +220,7 @@ export const ModelRegistryModal: React.FC<Props> = ({
     };
 
     return (
-        <Modal visible={visible} animationType="slide" transparent>
+        <Modal visible={visible} animationType="slide" transparent onRequestClose={onClose}>
             <View style={styles.modalOverlay}>
                 <View style={styles.modalContainer}>
                     <View style={styles.header}>
@@ -157,9 +242,15 @@ export const ModelRegistryModal: React.FC<Props> = ({
                         </Text>
                     </View>
 
-                    <TouchableOpacity style={styles.addBtn} onPress={handleRegisterModel}>
-                        <Text style={styles.addBtnText}>+ Register GGUF Model</Text>
-                    </TouchableOpacity>
+                    {/* Action Row for Import */}
+                    <View style={styles.importActionRow}>
+                        <TouchableOpacity style={styles.addBtn} onPress={handleRegisterTextModel}>
+                            <Text style={styles.addBtnText}>+ Text GGUF</Text>
+                        </TouchableOpacity>
+                        <TouchableOpacity style={styles.addVisionBtn} onPress={handleRegisterVisionPair}>
+                            <Text style={styles.addBtnText}>📷 Vision Pair (Base + mmproj)</Text>
+                        </TouchableOpacity>
+                    </View>
 
                     {loading ? (
                         <ActivityIndicator color="#38BDF8" style={{ marginTop: 24 }} />
@@ -171,14 +262,26 @@ export const ModelRegistryModal: React.FC<Props> = ({
                             renderItem={({ item }) => (
                                 <View style={styles.modelCard}>
                                     <View style={{ flex: 1 }}>
-                                        <Text style={styles.modelName} numberOfLines={1}>
-                                            {item.original_name}
-                                        </Text>
+                                        <View style={styles.nameRow}>
+                                            <Text style={styles.modelName} numberOfLines={1}>
+                                                {item.original_name}
+                                            </Text>
+                                            {item.modality === 'vision' && (
+                                                <View style={styles.visionBadge}>
+                                                    <Text style={styles.visionBadgeText}>VISION</Text>
+                                                </View>
+                                            )}
+                                        </View>
                                         <Text style={styles.modelMeta}>
                                             {formatSize(item.size_bytes)}{' '}
                                             {item.is_embedding === 1 && ' • [Dedicated Embedding]'}
                                             {item.is_default === 1 && ' • [Default Chat]'}
                                         </Text>
+                                        {item.modality === 'vision' && item.mmproj_filename && (
+                                            <Text style={styles.mmprojMeta} numberOfLines={1}>
+                                                Projector: {item.mmproj_filename} ({formatSize(item.mmproj_size_bytes || null)})
+                                            </Text>
+                                        )}
                                     </View>
 
                                     <View style={styles.cardActions}>
@@ -203,7 +306,7 @@ export const ModelRegistryModal: React.FC<Props> = ({
                                                         <Text style={styles.actionText}>Default</Text>
                                                     </TouchableOpacity>
                                                 )}
-                                                {!embeddingModel && (
+                                                {!embeddingModel && item.modality !== 'vision' && (
                                                     <TouchableOpacity
                                                         style={styles.embedLockBtn}
                                                         onPress={() => handleLockAsEmbedding(item)}
@@ -238,7 +341,7 @@ const styles = StyleSheet.create({
     },
     modalContainer: {
         backgroundColor: '#0F172A',
-        height: '80%',
+        height: '82%',
         borderTopLeftRadius: 16,
         borderTopRightRadius: 16,
         padding: 16,
@@ -262,22 +365,43 @@ const styles = StyleSheet.create({
     },
     embedBannerTitle: { color: '#F8FAFC', fontSize: 13, fontWeight: '700' },
     embedBannerDesc: { color: '#94A3B8', fontSize: 11, marginTop: 2 },
+    importActionRow: {
+        flexDirection: 'row',
+        gap: 8,
+        marginBottom: 12,
+    },
     addBtn: {
+        flex: 1,
         backgroundColor: '#0284C7',
         padding: 12,
         borderRadius: 8,
         alignItems: 'center',
-        marginBottom: 12,
     },
-    addBtnText: { color: '#FFFFFF', fontWeight: '600', fontSize: 14 },
+    addVisionBtn: {
+        flex: 1.5,
+        backgroundColor: '#059669',
+        padding: 12,
+        borderRadius: 8,
+        alignItems: 'center',
+    },
+    addBtnText: { color: '#FFFFFF', fontWeight: '600', fontSize: 13 },
     modelCard: {
         backgroundColor: '#1E293B',
         padding: 12,
         borderRadius: 8,
         marginBottom: 8,
     },
-    modelName: { color: '#F8FAFC', fontSize: 14, fontWeight: '600' },
+    nameRow: { flexDirection: 'row', alignItems: 'center', gap: 6 },
+    modelName: { color: '#F8FAFC', fontSize: 14, fontWeight: '600', flexShrink: 1 },
+    visionBadge: {
+        backgroundColor: '#10B98125',
+        paddingHorizontal: 6,
+        paddingVertical: 2,
+        borderRadius: 4,
+    },
+    visionBadgeText: { color: '#10B981', fontSize: 10, fontWeight: '700' },
     modelMeta: { color: '#94A3B8', fontSize: 12, marginTop: 4 },
+    mmprojMeta: { color: '#38BDF8', fontSize: 11, marginTop: 2 },
     cardActions: {
         flexDirection: 'row',
         gap: 6,

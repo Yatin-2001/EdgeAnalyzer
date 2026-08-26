@@ -22,6 +22,8 @@ export interface StreamCallbacks {
 export interface LoadedModel {
   name: string;
   path: string;
+  mmprojPath?: string;
+  isVisionCapable: boolean;
 }
 
 export interface LLMRuntimeConfig {
@@ -30,6 +32,27 @@ export interface LLMRuntimeConfig {
   nThreads?: number;
   nBatch?: number;
   useMlock?: boolean;
+}
+
+export interface MessageContentPart {
+  type: 'text' | 'image_url';
+  text?: string;
+  image_url?: { url: string };
+}
+
+export interface ChatMessage {
+  role: 'system' | 'user' | 'assistant';
+  content: string | MessageContentPart[];
+}
+
+export interface CompletionOptions {
+  prompt?: string;
+  messages?: ChatMessage[];
+  imagePaths?: string[];
+  nPredict?: number;
+  temperature?: number;
+  topP?: number;
+  stop?: string[];
 }
 
 export class LLMService {
@@ -56,6 +79,10 @@ export class LLMService {
     return this.status === 'READY' && this.context !== null;
   }
 
+  public isVisionCapable(): boolean {
+    return !!this.loadedModel?.isVisionCapable;
+  }
+
   public getLoadedModel(): LoadedModel | null {
     return this.loadedModel;
   }
@@ -64,7 +91,8 @@ export class LLMService {
       modelPath: string,
       modelName: string,
       onProgress?: (progress: number) => void,
-      config: LLMRuntimeConfig = {}
+      config: LLMRuntimeConfig = {},
+      mmprojPath?: string
   ): Promise<void> {
     if (!modelPath) throw new Error('Model path is required.');
     if (this.status === 'LOADING') throw new Error('A model is already loading.');
@@ -77,16 +105,17 @@ export class LLMService {
     this.status = 'LOADING';
 
     try {
-      const normalizedPath = this.normalizeModelPath(modelPath);
+      const normalizedModelPath = this.normalizeModelPath(modelPath);
+      const normalizedMmproj = mmprojPath ? this.normalizeModelPath(mmprojPath) : undefined;
 
       this.context = await initLlama(
           {
-            model: normalizedPath,
-            use_mlock: config.useMlock ?? true,
-            n_ctx: config.nCtx ?? 4096,
+            model: normalizedModelPath,
+            use_mlock: config.useMlock ?? false,
+            n_ctx: config.nCtx ?? 2048,
             n_gpu_layers: config.nGpuLayers ?? 99,
             n_threads: config.nThreads ?? 4,
-            n_batch: config.nBatch ?? 512,
+            n_batch: config.nBatch ?? 256,
           },
           (progress: number) => {
             if (!onProgress) return;
@@ -97,11 +126,30 @@ export class LLMService {
 
       console.log('Is GPU Active:', this.context.gpu);
       console.log('GPU Device Info:', this.context.devices);
-      if (!this.context.gpu) {
-        console.warn('Reason GPU is disabled:', this.context.reasonNoGPU);
+
+      let isVisionActive = false;
+      if (normalizedMmproj) {
+        try {
+          const cleanMmproj = normalizedMmproj.replace('file://', '');
+          const success = await this.context.initMultimodal({
+            path: cleanMmproj,
+            use_gpu: true,
+          });
+
+          const isEnabled = await this.context.isMultimodalEnabled();
+          isVisionActive = success !== false && isEnabled;
+          console.log('[LLMService] Multimodal Initialized:', isVisionActive);
+        } catch (mmErr) {
+          console.warn('[LLMService] Failed to initialize mmproj:', mmErr);
+        }
       }
 
-      this.loadedModel = { name: modelName, path: normalizedPath };
+      this.loadedModel = {
+        name: modelName,
+        path: normalizedModelPath,
+        mmprojPath: normalizedMmproj,
+        isVisionCapable: isVisionActive,
+      };
       this.status = 'READY';
     } catch (error) {
       this.context = null;
@@ -120,11 +168,16 @@ export class LLMService {
   }
 
   public async streamCompletion(
-      formattedPrompt: string,
+      optionsOrPrompt: string | CompletionOptions,
       callbacks: StreamCallbacks
   ): Promise<{ fullText: string; metrics: PerformanceMetrics }> {
     if (!this.context) throw new Error('LLM Context is not initialized.');
     if (this.status !== 'READY') throw new Error(`LLM is not ready (Status: ${this.status}).`);
+
+    const options: CompletionOptions =
+        typeof optionsOrPrompt === 'string'
+            ? { prompt: optionsOrPrompt }
+            : optionsOrPrompt;
 
     this.status = 'GENERATING';
     this.isInterrupted = false;
@@ -135,15 +188,52 @@ export class LLMService {
     let ttftMs = 0;
     const startTime = performance.now();
 
+    let messagesPayload: ChatMessage[] | undefined = options.messages;
+
+    if (!messagesPayload && options.imagePaths && options.imagePaths.length > 0) {
+      const contentParts: MessageContentPart[] = [
+        { type: 'text', text: options.prompt || 'Describe and analyze this image.' },
+      ];
+
+      for (const imgPath of options.imagePaths) {
+        const cleanUri = imgPath.startsWith('file://') ? imgPath : `file://${imgPath}`;
+        contentParts.push({
+          type: 'image_url',
+          image_url: { url: cleanUri },
+        });
+      }
+
+      messagesPayload = [
+        {
+          role: 'user',
+          content: contentParts,
+        },
+      ];
+    }
+
     try {
+      const completionConfig: Record<string, any> = {
+        n_predict: options.nPredict ?? 512,
+        temperature: options.temperature ?? 0.2,
+        top_p: options.topP ?? 0.9,
+        stop: options.stop ?? [
+          '<|eot_id|>',
+          '<|end_of_text|>',
+          '<|im_end|>',
+          'User:',
+          'Assistant:',
+          '</s>',
+        ],
+      };
+
+      if (messagesPayload) {
+        completionConfig.messages = messagesPayload as any;
+      } else {
+        completionConfig.prompt = options.prompt || '';
+      }
+
       const result = await this.context.completion(
-          {
-            prompt: formattedPrompt,
-            n_predict: 512,
-            temperature: 0.7,
-            top_p: 0.9,
-            stop: ['<|eot_id|>', '<|end_of_text|>', '<|im_end|>', 'User:', 'Assistant:'],
-          },
+          completionConfig as any,
           (data) => {
             if (this.isInterrupted) return;
             if (!ttftRecorded) {
@@ -177,9 +267,6 @@ export class LLMService {
     }
   }
 
-  /**
-   * Fast, non-streaming completion for background workers and tool detection.
-   */
   public async completeNonStreaming(
       formattedPrompt: string,
       maxTokens: number = 128
@@ -190,8 +277,8 @@ export class LLMService {
       const res = await this.context.completion({
         prompt: formattedPrompt,
         n_predict: maxTokens,
-        temperature: 0.1, // Low temperature for deterministic tool calls
-        stop: ['<|eot_id|>', '<|end_of_text|>', '<|im_end|>'], // Removed '\n'
+        temperature: 0.1,
+        stop: ['<|eot_id|>', '<|end_of_text|>', '<|im_end|>'],
       });
       return res.text || '';
     } catch (error) {
@@ -200,9 +287,6 @@ export class LLMService {
     }
   }
 
-  /**
-   * Generates a 3-5 word title for a conversation.
-   */
   public async generateTitle(firstUserPrompt: string): Promise<string> {
     if (!this.context || this.status !== 'READY') return 'New Conversation';
 
@@ -236,6 +320,13 @@ export class LLMService {
     try {
       if (this.status === 'GENERATING') {
         await this.stopCompletion();
+      }
+      if (this.loadedModel?.isVisionCapable) {
+        try {
+          await this.context.releaseMultimodal();
+        } catch (mmErr) {
+          console.warn('[LLMService] Error releasing multimodal context:', mmErr);
+        }
       }
       await this.context.release();
     } finally {

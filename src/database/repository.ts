@@ -8,6 +8,10 @@ export interface ModelRecord {
     is_default: number;
     is_embedding: number; // 1 = Locked embedding model
     created_at: number;
+    modality?: 'text' | 'vision';
+    mmproj_uri?: string | null;
+    mmproj_filename?: string | null;
+    mmproj_size_bytes?: number | null;
 }
 
 export interface ConversationRecord {
@@ -66,14 +70,45 @@ export function blobToVector(blob: Uint8Array): Float32Array {
 }
 
 // ----------------------------------------------------
+// Safe Database Migration Helper (PRAGMA inspection)
+// ----------------------------------------------------
+let migrationChecked = false;
+async function ensureSchema(): Promise<void> {
+    if (migrationChecked) return;
+    try {
+        const db = await getDatabase();
+        const columns = await db.getAllAsync<{ name: string }>('PRAGMA table_info(models);');
+        const columnNames = new Set(columns.map((c) => c.name));
+
+        if (!columnNames.has('modality')) {
+            await db.runAsync("ALTER TABLE models ADD COLUMN modality TEXT DEFAULT 'text';");
+        }
+        if (!columnNames.has('mmproj_uri')) {
+            await db.runAsync('ALTER TABLE models ADD COLUMN mmproj_uri TEXT;');
+        }
+        if (!columnNames.has('mmproj_filename')) {
+            await db.runAsync('ALTER TABLE models ADD COLUMN mmproj_filename TEXT;');
+        }
+        if (!columnNames.has('mmproj_size_bytes')) {
+            await db.runAsync('ALTER TABLE models ADD COLUMN mmproj_size_bytes INTEGER;');
+        }
+        migrationChecked = true;
+    } catch (err) {
+        console.warn('[Repository] Schema check warning:', err);
+    }
+}
+
+// ----------------------------------------------------
 // Models CRUD & Dedicated Embedding Lock
 // ----------------------------------------------------
 export async function getAllModels(): Promise<ModelRecord[]> {
+    await ensureSchema();
     const db = await getDatabase();
     return db.getAllAsync<ModelRecord>('SELECT * FROM models ORDER BY created_at DESC;');
 }
 
 export async function getChatModels(): Promise<ModelRecord[]> {
+    await ensureSchema();
     const db = await getDatabase();
     return db.getAllAsync<ModelRecord>(
         'SELECT * FROM models WHERE is_embedding = 0 ORDER BY created_at DESC;'
@@ -81,6 +116,7 @@ export async function getChatModels(): Promise<ModelRecord[]> {
 }
 
 export async function getEmbeddingModel(): Promise<ModelRecord | null> {
+    await ensureSchema();
     const db = await getDatabase();
     return db.getFirstAsync<ModelRecord>(
         'SELECT * FROM models WHERE is_embedding = 1 LIMIT 1;'
@@ -88,11 +124,13 @@ export async function getEmbeddingModel(): Promise<ModelRecord | null> {
 }
 
 export async function getModelById(id: string): Promise<ModelRecord | null> {
+    await ensureSchema();
     const db = await getDatabase();
     return db.getFirstAsync<ModelRecord>('SELECT * FROM models WHERE id = ?;', [id]);
 }
 
 export async function getDefaultChatModel(): Promise<ModelRecord | null> {
+    await ensureSchema();
     const db = await getDatabase();
     return db.getFirstAsync<ModelRecord>(
         'SELECT * FROM models WHERE is_default = 1 AND is_embedding = 0 LIMIT 1;'
@@ -103,8 +141,13 @@ export async function insertModel(
     name: string,
     uri: string,
     sizeBytes: number | null,
-    isEmbedding: boolean = false
+    isEmbedding: boolean = false,
+    modality: 'text' | 'vision' = 'text',
+    mmprojUri: string | null = null,
+    mmprojFilename: string | null = null,
+    mmprojSizeBytes: number | null = null
 ): Promise<ModelRecord> {
+    await ensureSchema();
     const db = await getDatabase();
     const id = generateUUID();
     const now = Date.now();
@@ -115,9 +158,23 @@ export async function insertModel(
     const isDefault = !isEmbedding && countRow && countRow.count === 0 ? 1 : 0;
 
     await db.runAsync(
-        `INSERT INTO models (id, original_name, original_uri, size_bytes, is_default, is_embedding, created_at)
-     VALUES (?, ?, ?, ?, ?, ?, ?);`,
-        [id, name, uri, sizeBytes, isDefault, isEmbedding ? 1 : 0, now]
+        `INSERT INTO models (
+      id, original_name, original_uri, size_bytes, is_default, is_embedding, created_at,
+      modality, mmproj_uri, mmproj_filename, mmproj_size_bytes
+    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?);`,
+        [
+            id,
+            name,
+            uri,
+            sizeBytes,
+            isDefault,
+            isEmbedding ? 1 : 0,
+            now,
+            modality,
+            mmprojUri,
+            mmprojFilename,
+            mmprojSizeBytes,
+        ]
     );
 
     return {
@@ -128,12 +185,33 @@ export async function insertModel(
         is_default: isDefault,
         is_embedding: isEmbedding ? 1 : 0,
         created_at: now,
+        modality,
+        mmproj_uri: mmprojUri,
+        mmproj_filename: mmprojFilename,
+        mmproj_size_bytes: mmprojSizeBytes,
     };
 }
 
-/**
- * Irreversibly locks a model as the dedicated embedding model.
- */
+export async function insertVisionModel(
+    baseName: string,
+    baseUri: string,
+    baseSizeBytes: number | null,
+    mmprojName: string,
+    mmprojUri: string,
+    mmprojSizeBytes: number | null
+): Promise<ModelRecord> {
+    return insertModel(
+        baseName,
+        baseUri,
+        baseSizeBytes,
+        false,
+        'vision',
+        mmprojUri,
+        mmprojName,
+        mmprojSizeBytes
+    );
+}
+
 export async function lockDedicatedEmbeddingModel(id: string): Promise<void> {
     const db = await getDatabase();
     const existing = await getEmbeddingModel();
@@ -142,7 +220,10 @@ export async function lockDedicatedEmbeddingModel(id: string): Promise<void> {
     }
 
     await db.withTransactionAsync(async () => {
-        await db.runAsync('UPDATE models SET is_default = 0, is_embedding = 1 WHERE id = ?;', [id]);
+        await db.runAsync(
+            'UPDATE models SET is_default = 0, is_embedding = 1 WHERE id = ?;',
+            [id]
+        );
     });
 }
 
@@ -150,7 +231,10 @@ export async function setDefaultChatModel(id: string): Promise<void> {
     const db = await getDatabase();
     await db.withTransactionAsync(async () => {
         await db.runAsync('UPDATE models SET is_default = 0 WHERE is_embedding = 0;');
-        await db.runAsync('UPDATE models SET is_default = 1 WHERE id = ? AND is_embedding = 0;', [id]);
+        await db.runAsync(
+            'UPDATE models SET is_default = 1 WHERE id = ? AND is_embedding = 0;',
+            [id]
+        );
     });
 }
 
@@ -227,7 +311,9 @@ export async function deleteConversation(id: string): Promise<void> {
     });
 }
 
-export async function getMessagesByConversation(conversationId: string): Promise<MessageRecord[]> {
+export async function getMessagesByConversation(
+    conversationId: string
+): Promise<MessageRecord[]> {
     const db = await getDatabase();
     return db.getAllAsync<MessageRecord>(
         'SELECT * FROM messages WHERE conversation_id = ? ORDER BY created_at ASC;',
