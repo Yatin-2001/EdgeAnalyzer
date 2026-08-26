@@ -95,6 +95,12 @@ export class LLMService {
           }
       );
 
+      console.log('Is GPU Active:', this.context.gpu);
+      console.log('GPU Device Info:', this.context.devices);
+      if (!this.context.gpu) {
+        console.warn('Reason GPU is disabled:', this.context.reasonNoGPU);
+      }
+
       this.loadedModel = { name: modelName, path: normalizedPath };
       this.status = 'READY';
     } catch (error) {

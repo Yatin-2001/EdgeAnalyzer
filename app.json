@@ -27,7 +27,7 @@
       [
         "llama.rn",
         {
-          "enableOpenCLAndHexagon": true,
+          "enableOpenCLAndHexagon": false,
           "enableVulkan": true
         }
       ],
