@@ -38,7 +38,8 @@
           "locationAlwaysAndWhenInUsePermission": "Allow EdgeAnalyzer to access your device location for live weather and contextual tools.",
           "locationWhenInUsePermission": "Allow EdgeAnalyzer to access your device location for live weather and contextual tools."
         }
-      ]
+      ],
+      "expo-secure-store"
     ]
   }
 }

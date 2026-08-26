@@ -35,6 +35,8 @@ import {
 import { ModelRegistryModal } from '@/src/components/ModelRegistryModal';
 import { ConversationDrawer } from '@/src/components/ConversationDrawer';
 import { ToolOrchestrator } from '@/src/services/ToolOrchestrator';
+import { SecureStorageService, SearchProvider } from '@/src/services/SecureStorageService';
+import { SearchSettingsModal } from '@/src/components/SearchSettingsModal';
 
 
 
@@ -61,6 +63,9 @@ export default function ChatScreen() {
 
   const toolOrchestrator = useRef(ToolOrchestrator.getInstance()).current;
 
+  const [searchProvider, setSearchProvider] = useState<SearchProvider>('tavily_keyless');
+  const [isSearchConfigOpen, setSearchConfigOpen] = useState(false);
+
   useEffect(() => {
     (async () => {
       // 1. Initialize dedicated embedding engine in the background
@@ -81,6 +86,24 @@ export default function ChatScreen() {
       modelManager.deleteWorkingCopy('chat').catch(() => {});
     };
   }, []);
+
+  useEffect(() => {
+    (async () => {
+      const activeSearch = await SecureStorageService.getActiveSearchProvider();
+      setSearchProvider(activeSearch);
+    })();
+  }, []);
+
+  const handleQuickToggleSearch = async () => {
+    const key = await SecureStorageService.getBraveApiKey();
+    if (!key) {
+      setSearchConfigOpen(true);
+      return;
+    }
+    const next = searchProvider === 'tavily_keyless' ? 'brave_custom' : 'tavily_keyless';
+    await SecureStorageService.setActiveSearchProvider(next);
+    setSearchProvider(next);
+  };
 
   const switchConversation = async (conv: ConversationRecord) => {
     setActiveConv(conv);
@@ -285,6 +308,24 @@ export default function ChatScreen() {
             </TouchableOpacity>
           </View>
 
+          {/* Quick Search Engine Switcher Badge */}
+          <TouchableOpacity
+              style={[
+                styles.searchPillBtn,
+                searchProvider === 'brave_custom' && styles.searchPillBtnActive,
+              ]}
+              onPress={handleQuickToggleSearch}
+          >
+            <Text
+                style={[
+                  styles.searchPillText,
+                  searchProvider === 'brave_custom' && styles.searchPillTextActive,
+                ]}
+            >
+              {searchProvider === 'brave_custom' ? '⚡ Brave Pro' : '🌐 Keyless'}
+            </Text>
+          </TouchableOpacity>
+
           <TouchableOpacity
               style={styles.iconBtn}
               onPress={() => setRegistryOpen(true)}
@@ -413,6 +454,12 @@ export default function ChatScreen() {
               }
             }}
         />
+
+        <SearchSettingsModal
+            visible={isSearchConfigOpen}
+            onClose={() => setSearchConfigOpen(false)}
+            onProviderChanged={(p) => setSearchProvider(p)}
+        />
       </View>
   );
 }
@@ -424,14 +471,35 @@ const styles = StyleSheet.create({
     height: 52,
     flexDirection: 'row',
     alignItems: 'center',
-    paddingHorizontal: 16,
+    paddingHorizontal: 12,
     borderBottomWidth: 1,
     borderBottomColor: '#1E293B',
+    gap: 6,
   },
   headerTitleWrap: { flex: 1, alignItems: 'center' },
   chatTitleText: { color: '#F8FAFC', fontSize: 16, fontWeight: '700' },
   modelSubtext: { color: '#38BDF8', fontSize: 12, marginTop: 2 },
-  iconBtn: { padding: 8 },
+  searchPillBtn: {
+    backgroundColor: '#1E293B',
+    paddingHorizontal: 10,
+    paddingVertical: 5,
+    borderRadius: 14,
+    borderWidth: 1,
+    borderColor: '#334155',
+  },
+  searchPillBtnActive: {
+    backgroundColor: '#0284C720',
+    borderColor: '#38BDF8',
+  },
+  searchPillText: {
+    color: '#94A3B8',
+    fontSize: 11,
+    fontWeight: '700',
+  },
+  searchPillTextActive: {
+    color: '#38BDF8',
+  },
+  iconBtn: { padding: 6 },
   iconText: { color: '#94A3B8', fontSize: 20 },
   loadingBanner: {
     flexDirection: 'row',
