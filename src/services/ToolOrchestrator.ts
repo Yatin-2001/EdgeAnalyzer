@@ -52,20 +52,17 @@ export class ToolOrchestrator {
             `### AVAILABLE TOOLS:\n${signatures}\n\n` +
             `### RULES FOR TOOL USE:\n` +
             `1. You can ONLY use the tools listed above. NEVER invent new tool names.\n` +
-            `2. For current facts, currency rates, news, or general search, use: web_search\n` +
-            `1. For ANY math, division, multiplication, or arithmetic (e.g. "1/0.01034", "15 * 89"), you MUST call: calculator\n` +
-            `4. For device coordinates(e.g. "where am I"), use: device_location\n` +
-            `5. For ANY weather/temperature query (e.g. "weather in Delhi" or "weather here"), you MUST call: weather\n` +
-            `6. You have live GPS and real-time APIs. NEVER guess or hallucinate weather, location, or facts.\n` +
-            `7. Output ONLY a raw JSON call and nothing else when invoking a tool:\n` +
+            `2. For current facts, YouTube channels, links, video info, currency rates, or search, use: web_search\n` +
+            `3. For ANY math, arithmetic, or computation, you MUST call: calculator\n` +
+            `4. For device coordinates (e.g. "where am I"), use: device_location\n` +
+            `5. For ANY weather query, you MUST call: weather\n` +
+            `6. Output ONLY a raw JSON call when invoking a tool:\n` +
             `{"tool": "<tool_name>", "parameters": {<key>: <value>}}\n\n` +
             `### EXAMPLES:\n` +
             `User: What is 1/0.01034?\n` +
             `Assistant: {"tool": "calculator", "parameters": {"expression": "1/0.01034"}}\n\n` +
-            `User: Weather in Delhi\n` +
-            `Assistant: {"tool": "weather", "parameters": {"location": "Delhi"}}\n\n` +
-            `User: Where am I currently?\n` +
-            `Assistant: {"tool": "device_location", "parameters": {}}\n\n` +
+            `User: Who made this video?\n` +
+            `Assistant: {"tool": "web_search", "parameters": {"query": "video title from image"}}\n\n` +
             `When tool output is provided, synthesize your response directly in plain language without further JSON.`
         );
     }
@@ -73,7 +70,8 @@ export class ToolOrchestrator {
     public async executeAgentLoop(
         initialPrompt: string,
         rawUserQuery: string,
-        callbacks: OrchestrationCallbacks
+        callbacks: OrchestrationCallbacks,
+        options: { imagePaths?: string[] } = {}
     ): Promise<{ fullText: string; metrics: PerformanceMetrics }> {
         let currentPrompt = initialPrompt;
         let cumulativeTokens = 0;
@@ -86,10 +84,26 @@ export class ToolOrchestrator {
         while (stepCount < ToolOrchestrator.MAX_TOOL_STEPS) {
             stepCount++;
 
-            const stepOutput = await this.llm.completeNonStreaming(currentPrompt, 160);
+            const isFirstTurnWithImage = stepCount === 1 && !!options.imagePaths && options.imagePaths.length > 0;
+
+            let stepOutput = '';
+            if (isFirstTurnWithImage) {
+                const firstTurnRes = await this.llm.streamCompletion(
+                    {
+                        prompt: currentPrompt,
+                        imagePaths: options.imagePaths,
+                        nPredict: 160,
+                        temperature: 0.1,
+                    },
+                    { onToken: () => {} }
+                );
+                stepOutput = firstTurnRes.fullText;
+            } else {
+                stepOutput = await this.llm.completeNonStreaming(currentPrompt, 160);
+            }
+
             let toolCall = this.parseAndNormalizeToolCall(stepOutput);
 
-            // Intent-Gating Fallback: Catch 1B hallucinations on step 1
             if (!toolCall && stepCount === 1 && rawUserQuery) {
                 toolCall = this.detectFallbackIntent(rawUserQuery);
             }
@@ -99,14 +113,20 @@ export class ToolOrchestrator {
                 : '';
 
             if (!toolCall || executedCalls.has(callSignature)) {
-                const finalStream = await this.llm.streamCompletion(currentPrompt, {
-                    onToken: (token) => callbacks.onToken(token),
-                    onMetrics: (metrics) => {
-                        if (initialTtftMs === 0) initialTtftMs = metrics.ttftMs;
-                        cumulativeTokens += metrics.totalTokens;
-                        cumulativeTimeSec += metrics.generationTimeSec;
+                const finalStream = await this.llm.streamCompletion(
+                    {
+                        prompt: currentPrompt,
+                        imagePaths: isFirstTurnWithImage ? options.imagePaths : undefined,
                     },
-                });
+                    {
+                        onToken: (token) => callbacks.onToken(token),
+                        onMetrics: (metrics) => {
+                            if (initialTtftMs === 0) initialTtftMs = metrics.ttftMs;
+                            cumulativeTokens += metrics.totalTokens;
+                            cumulativeTimeSec += metrics.generationTimeSec;
+                        },
+                    }
+                );
 
                 const totalTps =
                     cumulativeTimeSec > 0
@@ -130,7 +150,6 @@ export class ToolOrchestrator {
             }
 
             executedCalls.add(callSignature);
-
             callbacks.onToolCallDetected?.(toolCall.tool, toolCall.parameters, stepCount);
 
             const executor = this.registry.get(toolCall.tool);
@@ -154,12 +173,24 @@ export class ToolOrchestrator {
                     ? `${rawDataString.substring(0, 900)}...}`
                     : rawDataString;
 
-            currentPrompt +=
-                `<|start_header_id|>assistant<|end_header_id|>\n\n` +
-                `{"tool": "${toolCall.tool}", "parameters": ${JSON.stringify(toolCall.parameters || {})}}<|eot_id|>` +
-                `<|start_header_id|>tool<|end_header_id|>\n\n` +
-                `[Tool Output]:\n${clampedData}\n\nInstruction: Synthesize the final answer in natural language based on the data above.<|eot_id|>` +
-                `<|start_header_id|>assistant<|end_header_id|>\n\n`;
+            // Adaptive syntax injection: ChatML (Qwen/SmolVLM) vs Header IDs (Llama 3)
+            const isChatML = currentPrompt.includes('<|im_start|>');
+
+            if (isChatML) {
+                currentPrompt +=
+                    `<|im_start|>assistant\n` +
+                    `{"tool": "${toolCall.tool}", "parameters": ${JSON.stringify(toolCall.parameters || {})}}<|im_end|>\n` +
+                    `<|im_start|>tool\n` +
+                    `[Tool Output]:\n${clampedData}\n\nInstruction: Synthesize the final answer in natural language based on the data above.<|im_end|>\n` +
+                    `<|im_start|>assistant\n`;
+            } else {
+                currentPrompt +=
+                    `<|start_header_id|>assistant<|end_header_id|>\n\n` +
+                    `{"tool": "${toolCall.tool}", "parameters": ${JSON.stringify(toolCall.parameters || {})}}<|eot_id|>` +
+                    `<|start_header_id|>tool<|end_header_id|>\n\n` +
+                    `[Tool Output]:\n${clampedData}\n\nInstruction: Synthesize the final answer in natural language based on the data above.<|eot_id|>` +
+                    `<|start_header_id|>assistant<|end_header_id|>\n\n`;
+            }
         }
 
         return this.llm.streamCompletion(currentPrompt, callbacks);
@@ -168,7 +199,7 @@ export class ToolOrchestrator {
     private detectFallbackIntent(query: string): ToolCallPayload | null {
         const q = query.toLowerCase().trim();
 
-        // 1. Math / Calculations (e.g. "1/0.01034", "what is 45 * 12", "calculate 2^8")
+        // 1. Math / Calculations
         const mathMatch = q.match(/([\d\.]+\s*[\+\-\*\/\^%]\s*[\d\.\+\-\*\/\^%\s\(\)]+)/);
         if (mathMatch && mathMatch[1] && /[\+\-\*\/\^%]/.test(mathMatch[1])) {
             const expr = mathMatch[1].trim();
@@ -197,8 +228,8 @@ export class ToolOrchestrator {
             return { tool: 'weather', parameters: { location: cityMatch || 'current_location' } };
         }
 
-        // 4. Exchange rates & currency
-        if (/\b(exchange rate|dollar to inr|usd to inr|price of dollar|bitcoin price|gold rate)\b/i.test(q)) {
+        // 4. Search & Video Info
+        if (/\b(search|who is|who made|video link|channel|youtube|price of|buy|news|exchange rate|dollar to inr|usd to inr)\b/i.test(q)) {
             return { tool: 'web_search', parameters: { query } };
         }
 
@@ -217,7 +248,6 @@ export class ToolOrchestrator {
 
             if (!rawName) continue;
 
-            // Calculator normalization
             if (rawName.includes('calc') || rawName.includes('math')) {
                 rawName = 'calculator';
                 if (!rawParams.expression) {
@@ -235,11 +265,12 @@ export class ToolOrchestrator {
                 rawName === 'exchange_rate' ||
                 rawName === 'search' ||
                 rawName === 'google' ||
+                rawName === 'youtube' ||
                 rawName === 'finance'
             ) {
                 rawName = 'web_search';
                 if (!rawParams.query) {
-                    rawParams = { query: rawParams.reason || rawParams.expression || 'USD to INR exchange rate' };
+                    rawParams = { query: rawParams.reason || rawParams.expression || rawParams.channel || 'information' };
                 }
             } else if (rawName.includes('locat') || rawName.includes('gps')) {
                 rawName = 'device_location';
@@ -303,9 +334,7 @@ export class ToolOrchestrator {
 
                             const parsed = JSON.parse(cleaned);
                             results.push(parsed);
-                        } catch {
-                            // Ignore malformed JSON chunks
-                        }
+                        } catch {}
                         startIndex = -1;
                     }
                 }

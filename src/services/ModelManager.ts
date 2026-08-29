@@ -48,10 +48,68 @@ export class ModelManager {
     }
   }
 
+  /**
+   * Copies picked file into permanent app-private storage using ModelFileModule.
+   * Stored in Paths.document/models/<timestamp>_<filename>.gguf
+   */
+  public async importToPermanentStorage(
+      sourceUri: string,
+      filename: string
+  ): Promise<{ permanentUri: string; sizeBytes: number }> {
+    this.ensureModelsDirectory();
+
+    const sanitizedName = `${Date.now()}_${filename.replace(/[^a-zA-Z0-9._-]/g, '_')}`;
+    const destination = new File(this.modelsDirectory, sanitizedName);
+
+    if (destination.exists) {
+      destination.delete();
+    }
+
+    // Native stream copy from SAF content:// to internal file://
+    await ModelFile.copyContentUriToFile(sourceUri, destination.uri);
+
+    const workingFile = new File(destination.uri);
+    if (!workingFile.exists || workingFile.size <= 0) {
+      throw new Error(`Failed to copy "${filename}" to permanent storage.`);
+    }
+
+    const isGGUF = await ModelFile.isGGUFFile(workingFile.uri);
+    if (!isGGUF) {
+      workingFile.delete();
+      throw new Error(`The selected binary "${filename}" is not a valid GGUF file.`);
+    }
+
+    return {
+      permanentUri: workingFile.uri,
+      sizeBytes: workingFile.size,
+    };
+  }
+
   public async prepareModelFromRecord(
       record: ModelRecord,
       slotType: ModelSlotType = 'chat'
   ): Promise<ModelInfo> {
+    const uri = record.original_uri;
+
+    // 1. Permanent Local File Handling (Post-restart safe)
+    if (uri.startsWith('file://')) {
+      const localFile = new File(uri);
+      if (localFile.exists && localFile.size > 0) {
+        const info: ModelInfo = {
+          originalName: record.original_name,
+          workingFileName: record.original_name,
+          originalUri: uri,
+          workingUri: localFile.uri,
+          sizeBytes: localFile.size,
+          status: 'READY_TO_LOAD',
+          slotType,
+        };
+        this.setActiveSlot(slotType, info);
+        return info;
+      }
+    }
+
+    // 2. Fallback for content:// URIs
     return this.selectModel(record.original_uri, record.original_name, slotType);
   }
 
@@ -89,6 +147,24 @@ export class ModelManager {
 
     if (activeSlot && activeSlot.originalUri !== originalUri) {
       await this.deleteWorkingCopy(slotType);
+    }
+
+    // If already a permanent internal file, bypass SAF metadata calls
+    if (originalUri.startsWith('file://')) {
+      const localFile = new File(originalUri);
+      if (localFile.exists && localFile.size > 0) {
+        const info: ModelInfo = {
+          originalName: fallbackName || 'model.gguf',
+          workingFileName: fallbackName || 'model.gguf',
+          originalUri,
+          workingUri: localFile.uri,
+          sizeBytes: localFile.size,
+          status: 'READY_TO_LOAD',
+          slotType,
+        };
+        this.setActiveSlot(slotType, info);
+        return info;
+      }
     }
 
     let metadata: ModelFileMetadata;

@@ -52,6 +52,7 @@ export interface CompletionOptions {
   nPredict?: number;
   temperature?: number;
   topP?: number;
+  repeatPenalty?: number;
   stop?: string[];
 }
 
@@ -112,10 +113,10 @@ export class LLMService {
           {
             model: normalizedModelPath,
             use_mlock: config.useMlock ?? false,
-            n_ctx: config.nCtx ?? 2048,
+            n_ctx: config.nCtx ?? (normalizedMmproj ? 2048 : 4096),
             n_gpu_layers: config.nGpuLayers ?? 99,
             n_threads: config.nThreads ?? 4,
-            n_batch: config.nBatch ?? 256,
+            n_batch: config.nBatch ?? (normalizedMmproj ? 256 : 512),
           },
           (progress: number) => {
             if (!onProgress) return;
@@ -214,12 +215,17 @@ export class LLMService {
     try {
       const completionConfig: Record<string, any> = {
         n_predict: options.nPredict ?? 512,
-        temperature: options.temperature ?? 0.2,
+        temperature: options.temperature ?? 0.3,
         top_p: options.topP ?? 0.9,
+        // Anti-repetition penalties in llama.rn format
+        penalty_repeat: options.repeatPenalty ?? 1.18,
+        penalty_present: 0.15,
+        penalty_last_n: 64,
         stop: options.stop ?? [
           '<|eot_id|>',
           '<|end_of_text|>',
           '<|im_end|>',
+          '<|endoftext|>',
           'User:',
           'Assistant:',
           '</s>',
@@ -278,8 +284,11 @@ export class LLMService {
         prompt: formattedPrompt,
         n_predict: maxTokens,
         temperature: 0.1,
-        stop: ['<|eot_id|>', '<|end_of_text|>', '<|im_end|>'],
-      });
+        penalty_repeat: 1.18,
+        penalty_present: 0.15,
+        penalty_last_n: 64,
+        stop: ['<|eot_id|>', '<|end_of_text|>', '<|im_end|>', '<|endoftext|>'],
+      } as any);
       return res.text || '';
     } catch (error) {
       console.warn('[LLMService] Non-streaming completion failed:', error);
@@ -291,7 +300,11 @@ export class LLMService {
     if (!this.context || this.status !== 'READY') return 'New Conversation';
 
     try {
-      const prompt = `<|begin_of_text|><|start_header_id|>system<|end_header_id|>\n\nCreate a 3-5 word concise title for this query. Output ONLY the title text.<|eot_id|><|start_header_id|>user<|end_header_id|>\n\n${firstUserPrompt}<|eot_id|><|start_header_id|>assistant<|end_header_id|>\n\n`;
+      const isChatML = this.loadedModel?.isVisionCapable;
+      const prompt = isChatML
+          ? `<|im_start|>system\nCreate a 3-5 word concise title for this query. Output ONLY the title text.<|im_end|>\n<|im_start|>user\n${firstUserPrompt}<|im_end|>\n<|im_start|>assistant\n`
+          : `<|begin_of_text|><|start_header_id|>system<|end_header_id|>\n\nCreate a 3-5 word concise title for this query. Output ONLY the title text.<|eot_id|><|start_header_id|>user<|end_header_id|>\n\n${firstUserPrompt}<|eot_id|><|start_header_id|>assistant<|end_header_id|>\n\n`;
+
       const text = await this.completeNonStreaming(prompt, 16);
       const clean = text.replace(/["'\n]/g, '').trim();
       return clean.length > 0 ? clean : 'New Conversation';

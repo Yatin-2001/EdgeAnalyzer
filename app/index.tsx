@@ -385,7 +385,6 @@ export default function ChatScreen() {
         <KeyboardAvoidingView
             style={styles.flexFill}
             behavior={Platform.OS === 'ios' ? 'padding' : 'height'}
-            keyboardVerticalOffset={Platform.OS === 'ios' ? 0 : 20}
         >
           <FlatList
               ref={flatListRef}

@@ -10,7 +10,7 @@ import {
     ActivityIndicator,
 } from 'react-native';
 import * as DocumentPicker from 'expo-document-picker';
-import ModelFile from '../../modules/model-file/src/ModelFileModule';
+import { File } from 'expo-file-system';
 import {
     getAllModels,
     insertModel,
@@ -21,7 +21,10 @@ import {
     getEmbeddingModel,
     ModelRecord,
 } from '../database/repository';
+import { ModelManager } from '../services/ModelManager';
 import { EmbeddingService } from '../services/EmbeddingService';
+
+
 
 interface Props {
     visible: boolean;
@@ -37,6 +40,9 @@ export const ModelRegistryModal: React.FC<Props> = ({
     const [models, setModels] = useState<ModelRecord[]>([]);
     const [embeddingModel, setEmbeddingModel] = useState<ModelRecord | null>(null);
     const [loading, setLoading] = useState(false);
+    const [copyProgressText, setCopyProgressText] = useState<string | null>(null);
+
+    const modelManager = ModelManager.getInstance();
 
     const loadRegistry = async () => {
         setLoading(true);
@@ -56,7 +62,7 @@ export const ModelRegistryModal: React.FC<Props> = ({
         if (visible) loadRegistry();
     }, [visible]);
 
-    // Safe DocumentPicker for Text Model (.gguf)
+    // Safe Text GGUF Import with Permanent Internal Copy
     const handleRegisterTextModel = async () => {
         try {
             const res = await DocumentPicker.getDocumentAsync({
@@ -66,32 +72,35 @@ export const ModelRegistryModal: React.FC<Props> = ({
 
             if (res.canceled || !res.assets?.[0]) return;
             const file = res.assets[0];
-
-            let originalName = file.name?.trim();
-            let sizeBytes = file.size ?? null;
-
-            try {
-                const metadata = await ModelFile.getContentUriMetadata(file.uri);
-                if (metadata.name) originalName = metadata.name.trim();
-                if (metadata.sizeBytes) sizeBytes = metadata.sizeBytes;
-            } catch {}
+            const originalName = file.name?.trim();
 
             if (!originalName || !originalName.toLowerCase().endsWith('.gguf')) {
                 Alert.alert('Invalid Model', 'Please select a valid GGUF binary file.');
                 return;
             }
 
-            await insertModel(originalName, file.uri, sizeBytes);
+            setCopyProgressText(`Staging ${originalName} into app storage...`);
+
+            // 1. Copy to permanent internal storage
+            const { permanentUri, sizeBytes } = await modelManager.importToPermanentStorage(
+                file.uri,
+                originalName
+            );
+
+            // 2. Save permanent file:// path in DB
+            await insertModel(originalName, permanentUri, sizeBytes);
             await loadRegistry();
         } catch (error) {
             Alert.alert(
                 'Registration Failed',
                 error instanceof Error ? error.message : String(error)
             );
+        } finally {
+            setCopyProgressText(null);
         }
     };
 
-    // Safe DocumentPicker for Vision Model Pair (Base Model + mmproj)
+    // Safe Vision Pair Import with Permanent Internal Copy
     const handleRegisterVisionPair = async () => {
         try {
             // 1. Pick Base Model
@@ -102,22 +111,13 @@ export const ModelRegistryModal: React.FC<Props> = ({
 
             if (baseRes.canceled || !baseRes.assets?.[0]) return;
             const baseFile = baseRes.assets[0];
-
-            let baseName = baseFile.name?.trim();
-            let baseSize = baseFile.size ?? null;
-
-            try {
-                const meta = await ModelFile.getContentUriMetadata(baseFile.uri);
-                if (meta.name) baseName = meta.name.trim();
-                if (meta.sizeBytes) baseSize = meta.sizeBytes;
-            } catch {}
+            const baseName = baseFile.name?.trim();
 
             if (!baseName || !baseName.toLowerCase().endsWith('.gguf')) {
                 Alert.alert('Invalid Base Model', 'Please select a valid base .gguf model.');
                 return;
             }
 
-            // Small delay so Android Activity lifecycle settles
             await new Promise((resolve) => setTimeout(resolve, 350));
 
             // 2. Pick Companion mmproj File
@@ -128,28 +128,35 @@ export const ModelRegistryModal: React.FC<Props> = ({
 
             if (mmprojRes.canceled || !mmprojRes.assets?.[0]) return;
             const mmprojFile = mmprojRes.assets[0];
-
-            let mmprojName = mmprojFile.name?.trim();
-            let mmprojSize = mmprojFile.size ?? null;
-
-            try {
-                const meta = await ModelFile.getContentUriMetadata(mmprojFile.uri);
-                if (meta.name) mmprojName = meta.name.trim();
-                if (meta.sizeBytes) mmprojSize = meta.sizeBytes;
-            } catch {}
+            const mmprojName = mmprojFile.name?.trim();
 
             if (!mmprojName || !mmprojName.toLowerCase().endsWith('.gguf')) {
                 Alert.alert('Invalid Projector', 'The projector must be a valid .gguf file.');
                 return;
             }
 
+            setCopyProgressText(`Staging ${baseName} & ${mmprojName}...`);
+
+            // 1. Copy Base Model to permanent storage
+            const baseStored = await modelManager.importToPermanentStorage(
+                baseFile.uri,
+                baseName
+            );
+
+            // 2. Copy mmproj Projector to permanent storage
+            const mmprojStored = await modelManager.importToPermanentStorage(
+                mmprojFile.uri,
+                mmprojName
+            );
+
+            // 3. Store permanent file:// URIs in SQLite
             await insertVisionModel(
                 baseName,
-                baseFile.uri,
-                baseSize,
+                baseStored.permanentUri,
+                baseStored.sizeBytes,
                 mmprojName,
-                mmprojFile.uri,
-                mmprojSize
+                mmprojStored.permanentUri,
+                mmprojStored.sizeBytes
             );
 
             await loadRegistry();
@@ -158,6 +165,8 @@ export const ModelRegistryModal: React.FC<Props> = ({
                 'Vision Registration Failed',
                 error instanceof Error ? error.message : String(error)
             );
+        } finally {
+            setCopyProgressText(null);
         }
     };
 
@@ -190,17 +199,25 @@ export const ModelRegistryModal: React.FC<Props> = ({
         );
     };
 
-    const handleDelete = (id: string, name: string) => {
+    const handleDelete = (id: string, name: string, uri: string, mmprojUri?: string | null) => {
         Alert.alert(
             'Remove Model',
-            `Unregister "${name}"? The original file on device storage will remain untouched.`,
+            `Remove "${name}" and free internal storage?`,
             [
                 { text: 'Cancel', style: 'cancel' },
                 {
-                    text: 'Remove',
+                    text: 'Delete',
                     style: 'destructive',
                     onPress: async () => {
                         try {
+                            if (uri.startsWith('file://')) {
+                                const f = new File(uri);
+                                if (f.exists) f.delete();
+                            }
+                            if (mmprojUri && mmprojUri.startsWith('file://')) {
+                                const f = new File(mmprojUri);
+                                if (f.exists) f.delete();
+                            }
                             await deleteModel(id);
                             await loadRegistry();
                         } catch (err) {
@@ -230,6 +247,14 @@ export const ModelRegistryModal: React.FC<Props> = ({
                         </TouchableOpacity>
                     </View>
 
+                    {/* Staging Banner */}
+                    {copyProgressText && (
+                        <View style={styles.progressBanner}>
+                            <ActivityIndicator color="#38BDF8" size="small" />
+                            <Text style={styles.progressBannerText}>{copyProgressText}</Text>
+                        </View>
+                    )}
+
                     {/* Embedding Status Banner */}
                     <View style={styles.embedBanner}>
                         <Text style={styles.embedBannerTitle}>
@@ -244,10 +269,18 @@ export const ModelRegistryModal: React.FC<Props> = ({
 
                     {/* Action Row for Import */}
                     <View style={styles.importActionRow}>
-                        <TouchableOpacity style={styles.addBtn} onPress={handleRegisterTextModel}>
+                        <TouchableOpacity
+                            style={[styles.addBtn, !!copyProgressText && styles.disabledBtn]}
+                            onPress={handleRegisterTextModel}
+                            disabled={!!copyProgressText}
+                        >
                             <Text style={styles.addBtnText}>+ Text GGUF</Text>
                         </TouchableOpacity>
-                        <TouchableOpacity style={styles.addVisionBtn} onPress={handleRegisterVisionPair}>
+                        <TouchableOpacity
+                            style={[styles.addVisionBtn, !!copyProgressText && styles.disabledBtn]}
+                            onPress={handleRegisterVisionPair}
+                            disabled={!!copyProgressText}
+                        >
                             <Text style={styles.addBtnText}>📷 Vision Pair (Base + mmproj)</Text>
                         </TouchableOpacity>
                     </View>
@@ -295,7 +328,7 @@ export const ModelRegistryModal: React.FC<Props> = ({
                                                             onClose();
                                                         }}
                                                     >
-                                                        <Text style={styles.actionText}>Chat</Text>
+                                                        <Text style={styles.actionText}>Load</Text>
                                                     </TouchableOpacity>
                                                 )}
                                                 {item.is_default === 0 && (
@@ -316,7 +349,9 @@ export const ModelRegistryModal: React.FC<Props> = ({
                                                 )}
                                                 <TouchableOpacity
                                                     style={styles.deleteBtn}
-                                                    onPress={() => handleDelete(item.id, item.original_name)}
+                                                    onPress={() =>
+                                                        handleDelete(item.id, item.original_name, item.original_uri, item.mmproj_uri)
+                                                    }
                                                 >
                                                     <Text style={styles.deleteText}>Delete</Text>
                                                 </TouchableOpacity>
@@ -355,6 +390,16 @@ const styles = StyleSheet.create({
     headerTitle: { color: '#F8FAFC', fontSize: 18, fontWeight: '700' },
     closeBtn: { padding: 4 },
     closeBtnText: { color: '#38BDF8', fontSize: 16, fontWeight: '600' },
+    progressBanner: {
+        flexDirection: 'row',
+        alignItems: 'center',
+        backgroundColor: '#0284C720',
+        padding: 10,
+        borderRadius: 8,
+        marginBottom: 10,
+        gap: 8,
+    },
+    progressBannerText: { color: '#38BDF8', fontSize: 12, fontWeight: '600', flex: 1 },
     embedBanner: {
         backgroundColor: '#1E293B',
         padding: 12,
@@ -384,6 +429,7 @@ const styles = StyleSheet.create({
         borderRadius: 8,
         alignItems: 'center',
     },
+    disabledBtn: { opacity: 0.5 },
     addBtnText: { color: '#FFFFFF', fontWeight: '600', fontSize: 13 },
     modelCard: {
         backgroundColor: '#1E293B',

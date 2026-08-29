@@ -1,15 +1,16 @@
-import React, { useState } from 'react';
+import React, { useState, useRef } from 'react';
 import {
     View,
     Text,
     StyleSheet,
     TouchableOpacity,
     TextInput,
-    ScrollView,
     Image,
     FlatList,
     Alert,
     ActivityIndicator,
+    KeyboardAvoidingView,
+    Platform,
 } from 'react-native';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import * as ImagePicker from 'expo-image-picker';
@@ -19,73 +20,119 @@ import {
     InspectedAsset,
 } from '../services/DocumentInspectorService';
 import { LLMService, PerformanceMetrics } from '../services/LLMService';
+import { ToolOrchestrator } from '../services/ToolOrchestrator';
+import { ModelRegistryModal } from '../components/ModelRegistryModal';
+import { ModelRecord } from '../database/repository';
+
+
+
+export interface StudioMessage {
+    id: string;
+    role: 'user' | 'assistant';
+    content: string;
+}
 
 interface Props {
     onBackToChat?: () => void;
+    onSelectModel?: (model: ModelRecord) => Promise<void>;
 }
 
-export const StudioScreen: React.FC<Props> = ({ onBackToChat }) => {
+export const StudioScreen: React.FC<Props> = ({ onBackToChat, onSelectModel }) => {
     const insets = useSafeAreaInsets();
     const llm = LLMService.getInstance();
     const inspector = DocumentInspectorService.getInstance();
+    const orchestrator = ToolOrchestrator.getInstance();
+    const flatListRef = useRef<FlatList>(null);
 
+    // Asset & Chat State
     const [assets, setAssets] = useState<InspectedAsset[]>([]);
+    const [messages, setMessages] = useState<StudioMessage[]>([]);
     const [prompt, setPrompt] = useState('');
-    const [output, setOutput] = useState('');
-    const [isProcessing, setIsProcessing] = useState(false);
+    const [streamingContent, setStreamingContent] = useState('');
+    const [isGenerating, setIsGenerating] = useState(false);
     const [metrics, setMetrics] = useState<PerformanceMetrics | null>(null);
+    const [isRegistryOpen, setRegistryOpen] = useState(false);
 
-    const hasImages = assets.some((a) => a.type === 'STANDALONE_IMAGE');
+    // Flag: Has the visual baseline already been established through mmproj?
+    const [isVisualGrounded, setIsVisualGrounded] = useState(false);
+
+    const activeImage = assets.find((a) => a.type === 'STANDALONE_IMAGE');
+    const isImagePreProcessing = !!activeImage?.isProcessing;
     const activeModel = llm.getLoadedModel();
 
-    let badgeLabel = 'Text Engine • CPU/GPU';
-    if (hasImages) {
-        badgeLabel = activeModel?.isVisionCapable
-            ? `Vision Engine • ${activeModel.name} (GPU)`
-            : '⚠️ Image attached (Load Vision/mmproj Model)';
-    } else if (activeModel) {
-        badgeLabel = `Text Engine • ${activeModel.name} (GPU)`;
+    let badgeLabel = 'No Model Loaded';
+    if (activeModel) {
+        badgeLabel = activeModel.isVisionCapable
+            ? `Vision • ${activeModel.name}`
+            : `Text • ${activeModel.name}`;
     }
+
+    // Reset entire Studio session and visual baseline
+    const handleResetStudio = () => {
+        setAssets([]);
+        setMessages([]);
+        setPrompt('');
+        setStreamingContent('');
+        setIsVisualGrounded(false);
+        setMetrics(null);
+    };
+
+    const handleProcessImage = async (uri: string, name: string) => {
+        // A new image resets previous chat context
+        setMessages([]);
+        setIsVisualGrounded(false);
+
+        const tempId = `temp_${Date.now()}`;
+        const placeholderAsset: InspectedAsset = {
+            id: tempId,
+            name,
+            originalUri: uri,
+            type: 'STANDALONE_IMAGE',
+            mimeType: 'image/jpeg',
+            sizeBytes: 0,
+            estimatedTokens: 256,
+            isProcessing: true,
+        };
+
+        setAssets((prev) => [...prev.filter((a) => a.type !== 'STANDALONE_IMAGE'), placeholderAsset]);
+
+        try {
+            const processed = await inspector.inspectAndPreprocessAsset(name, uri, 'image/jpeg');
+            setAssets((prev) => prev.map((a) => (a.id === tempId ? processed : a)));
+        } catch {
+            setAssets((prev) => prev.filter((a) => a.id !== tempId));
+            Alert.alert('Processing Error', 'Failed to preprocess image.');
+        }
+    };
 
     const handleTakePhoto = async () => {
         const { status } = await ImagePicker.requestCameraPermissionsAsync();
         if (status !== 'granted') {
-            Alert.alert('Permission Denied', 'Camera access is required to take photos.');
+            Alert.alert('Permission Denied', 'Camera access is required.');
             return;
         }
 
         const res = await ImagePicker.launchCameraAsync({
-            quality: 0.8,
+            quality: 0.85,
             allowsEditing: false,
         });
 
         if (!res.canceled && res.assets[0]) {
             const file = res.assets[0];
-            const inspected = await inspector.inspectAsset(
-                file.fileName || 'camera_capture.jpg',
-                file.uri,
-                file.mimeType || 'image/jpeg'
-            );
-            setAssets((prev) => [...prev, inspected]);
+            await handleProcessImage(file.uri, file.fileName || 'camera_capture.jpg');
         }
     };
 
     const handlePickImage = async () => {
         const res = await ImagePicker.launchImageLibraryAsync({
             mediaTypes: ['images'],
-            quality: 0.8,
-            allowsMultipleSelection: true,
+            quality: 0.85,
+            allowsMultipleSelection: false,
         });
 
-        if (!res.canceled) {
-            for (const file of res.assets) {
-                const inspected = await inspector.inspectAsset(
-                    file.fileName || 'gallery_image.jpg',
-                    file.uri,
-                    file.mimeType || 'image/jpeg'
-                );
-                setAssets((prev) => [...prev, inspected]);
-            }
+        if (!res.canceled && res.assets[0]) {
+            const file = res.assets[0];
+            await handleProcessImage(file.uri, file.fileName || 'gallery_image.jpg');
         }
     };
 
@@ -93,94 +140,160 @@ export const StudioScreen: React.FC<Props> = ({ onBackToChat }) => {
         const res = await DocumentPicker.getDocumentAsync({
             type: ['text/*', 'application/pdf'],
             copyToCacheDirectory: true,
-            multiple: true,
+            multiple: false,
         });
 
-        if (!res.canceled && res.assets) {
-            for (const file of res.assets) {
-                const inspected = await inspector.inspectAsset(
-                    file.name,
-                    file.uri,
-                    file.mimeType || 'text/plain'
-                );
-                setAssets((prev) => [...prev, inspected]);
-            }
+        if (!res.canceled && res.assets?.[0]) {
+            const file = res.assets[0];
+            const inspected = await inspector.inspectAndPreprocessAsset(
+                file.name,
+                file.uri,
+                file.mimeType || 'text/plain'
+            );
+            setAssets((prev) => [...prev.filter((a) => a.type !== 'TEXT_DOC'), inspected]);
         }
     };
 
-    const handleExecuteStudio = async () => {
-        if (!prompt.trim() && assets.length === 0) {
-            Alert.alert('Input Required', 'Provide a prompt or attach documents/images to analyze.');
+    const handleSendMessage = async () => {
+        const userQuery = prompt.trim();
+        if (!userQuery && assets.length === 0) return;
+
+        if (isImagePreProcessing) {
+            Alert.alert('Please Wait', 'Image is still running OCR & compression.');
             return;
         }
 
         if (!llm.isReady()) {
-            Alert.alert('No Model Loaded', 'Please load a GGUF model in the chat screen before running Studio analysis.');
+            Alert.alert('No Model Loaded', 'Tap the model badge above to select a model.');
             return;
         }
 
-        const imageAssets = assets.filter((a) => a.type === 'STANDALONE_IMAGE');
-        if (imageAssets.length > 0 && !llm.isVisionCapable()) {
+        if (activeImage && !llm.isVisionCapable()) {
             Alert.alert(
                 'Vision Model Required',
-                'You attached an image, but the loaded model does not have an active mmproj projector. Load a Vision Model pair (e.g. Qwen2-VL) or remove the image.'
+                'An image is attached, but the active model is text-only. Load a vision pair (e.g. Qwen2-VL or SmolVLM) in Settings.'
             );
             return;
         }
 
-        setIsProcessing(true);
-        setOutput('');
-        setMetrics(null);
+        const effectiveUserText = userQuery || 'Describe and analyze the attached image in detail.';
+        const userMsg: StudioMessage = {
+            id: `usr_${Date.now()}`,
+            role: 'user',
+            content: effectiveUserText,
+        };
+
+        const updatedHistory = [...messages, userMsg];
+        setMessages(updatedHistory);
+        setPrompt('');
+        setIsGenerating(true);
+        setStreamingContent('');
 
         try {
-            const docContext = inspector.assembleDocumentContext(assets, 2000);
+            // 1. Determine if this turn requires raw mmproj evaluation
+            const isFirstVisualTurn = !isVisualGrounded && !!activeImage?.downscaledUri;
 
-            let finalPrompt = prompt.trim() || 'Analyze the attached content in detail.';
-            if (docContext) {
-                finalPrompt = `${docContext}\n\nUser Question: ${finalPrompt}`;
+            let promptPayload = '';
+            const baseSystem = 'You are an intelligent multimodal AI assistant analyzing documents, images, and screens.';
+
+            if (isFirstVisualTurn) {
+                // Turn 1: Ground visual context with OCR text block
+                const formattedSystem = orchestrator.formatSystemPromptWithTools(baseSystem, effectiveUserText);
+                const docAndOcrContext = inspector.assemblePromptContext(assets, effectiveUserText);
+
+                promptPayload =
+                    `<|im_start|>system\n${formattedSystem}<|im_end|>\n` +
+                    `<|im_start|>user\n${docAndOcrContext}<|im_end|>\n` +
+                    `<|im_start|>assistant\n`;
+            } else {
+                // Turn 2+: Standard conversational context (bypasses mmproj for ~120ms TTFT)
+                let conversationTurns = '';
+                for (const msg of updatedHistory) {
+                    conversationTurns += `<|im_start|>${msg.role}\n${msg.content}<|im_end|>\n`;
+                }
+
+                const formattedSystem = orchestrator.formatSystemPromptWithTools(baseSystem, effectiveUserText);
+                promptPayload =
+                    `<|im_start|>system\n${formattedSystem}<|im_end|>\n` +
+                    conversationTurns +
+                    `<|im_start|>assistant\n`;
             }
 
-            await llm.streamCompletion(
+            // 2. Execute via ToolOrchestrator
+            const { fullText, metrics: genMetrics } = await orchestrator.executeAgentLoop(
+                promptPayload,
+                effectiveUserText,
                 {
-                    prompt: finalPrompt,
-                    imagePaths: imageAssets.map((a) => a.uri),
-                    nPredict: 512,
-                    temperature: 0.2,
+                    onToken: (tok) => setStreamingContent((prev) => prev + tok),
+                    onMetrics: (m) => setMetrics(m),
+                    onToolCallDetected: (toolName, _, step) => {
+                        setStreamingContent(
+                            (prev) => prev + `⚙️ [Step ${step}] Executing tool: ${toolName}...\n`
+                        );
+                    },
+                    onToolExecutionCompleted: (toolName, res, step) => {
+                        setStreamingContent(
+                            (prev) =>
+                                prev + `✓ [Step ${step}] ${toolName} completed (${res.executionTimeMs}ms)\n\n`
+                        );
+                    },
                 },
                 {
-                    onToken: (token) => setOutput((prev) => prev + token),
-                    onMetrics: (m) => setMetrics(m),
+                    imagePaths: isFirstVisualTurn ? [activeImage!.downscaledUri!] : undefined,
                 }
             );
-        } catch (error) {
-            Alert.alert('Studio Inference Error', String(error));
-        } finally {
-            setIsProcessing(false);
-        }
-    };
 
-    const handleResetStudio = () => {
-        setAssets([]);
-        setPrompt('');
-        setOutput('');
-        setMetrics(null);
+            setMessages((prev) => [
+                ...prev,
+                {
+                    id: `asst_${Date.now()}`,
+                    role: 'assistant',
+                    content: fullText,
+                },
+            ]);
+
+            if (isFirstVisualTurn) {
+                setIsVisualGrounded(true); // Visual baseline is now cached in conversation history
+            }
+        } catch (error) {
+            setMessages((prev) => [
+                ...prev,
+                {
+                    id: `err_${Date.now()}`,
+                    role: 'assistant',
+                    content: `Inference Error: ${String(error)}`,
+                },
+            ]);
+        } finally {
+            setStreamingContent('');
+            setIsGenerating(false);
+        }
     };
 
     return (
         <View style={[styles.container, { paddingTop: insets.top }]}>
+            {/* Header */}
             <View style={styles.header}>
-                <View style={styles.headerLeft}>
-                    {onBackToChat && (
-                        <TouchableOpacity style={styles.backBtn} onPress={onBackToChat}>
-                            <Text style={styles.backBtnText}>‹ Chat</Text>
-                        </TouchableOpacity>
-                    )}
-                    <View>
-                        <Text style={styles.headerTitle}>Document & Image Studio</Text>
-                        <View style={[styles.badge, hasImages ? styles.badgeVision : styles.badgeText]}>
-                            <Text style={styles.badgeLabel}>{badgeLabel}</Text>
-                        </View>
-                    </View>
+                {onBackToChat && (
+                    <TouchableOpacity style={styles.backBtn} onPress={onBackToChat}>
+                        <Text style={styles.backBtnText}>‹ Chat</Text>
+                    </TouchableOpacity>
+                )}
+
+                <View style={styles.headerCenter}>
+                    <Text style={styles.headerTitle}>Studio</Text>
+                    <TouchableOpacity
+                        style={[
+                            styles.badge,
+                            activeModel?.isVisionCapable ? styles.badgeVision : styles.badgeText,
+                        ]}
+                        onPress={() => setRegistryOpen(true)}
+                        activeOpacity={0.7}
+                    >
+                        <Text style={styles.badgeLabel} numberOfLines={1} ellipsizeMode="tail">
+                            {badgeLabel} ▾
+                        </Text>
+                    </TouchableOpacity>
                 </View>
 
                 <TouchableOpacity style={styles.resetBtn} onPress={handleResetStudio}>
@@ -188,136 +301,194 @@ export const StudioScreen: React.FC<Props> = ({ onBackToChat }) => {
                 </TouchableOpacity>
             </View>
 
+            {/* Action Buttons */}
             <View style={styles.actionBar}>
                 <TouchableOpacity style={styles.actionBtn} onPress={handleTakePhoto}>
-                    <Text style={styles.actionBtnText}>📷 Take Photo</Text>
+                    <Text style={styles.actionBtnText}>📷 Photo</Text>
                 </TouchableOpacity>
                 <TouchableOpacity style={styles.actionBtn} onPress={handlePickImage}>
-                    <Text style={styles.actionBtnText}>🖼️ Pick Image</Text>
+                    <Text style={styles.actionBtnText}>🖼️ Image (Max 1)</Text>
                 </TouchableOpacity>
                 <TouchableOpacity style={styles.actionBtn} onPress={handleImportDoc}>
-                    <Text style={styles.actionBtnText}>📄 Import Doc</Text>
+                    <Text style={styles.actionBtnText}>📄 Doc / PDF</Text>
                 </TouchableOpacity>
             </View>
 
+            {/* Active Image / Document Card */}
             {assets.length > 0 && (
-                <FlatList
-                    data={assets}
-                    horizontal
-                    keyExtractor={(item) => item.id}
-                    style={styles.carousel}
-                    contentContainerStyle={styles.carouselContent}
-                    showsHorizontalScrollIndicator={false}
-                    renderItem={({ item }) => (
-                        <View style={styles.card}>
+                <View style={styles.assetContainer}>
+                    {assets.map((item) => (
+                        <View key={item.id} style={styles.assetCard}>
                             {item.type === 'STANDALONE_IMAGE' ? (
-                                <Image source={{ uri: item.uri }} style={styles.thumbImage} />
+                                <View style={styles.imageWrap}>
+                                    <Image
+                                        source={{ uri: item.downscaledUri || item.originalUri }}
+                                        style={styles.thumbImage}
+                                    />
+                                    {item.isProcessing && (
+                                        <View style={styles.processingOverlay}>
+                                            <ActivityIndicator color="#38BDF8" size="small" />
+                                            <Text style={styles.processingText}>Running OCR & Compression...</Text>
+                                        </View>
+                                    )}
+                                </View>
                             ) : (
-                                <View style={styles.docPlaceholder}>
+                                <View style={styles.docWrap}>
                                     <Text style={styles.docIcon}>📄</Text>
-                                    <Text style={styles.docName} numberOfLines={2}>
+                                    <Text style={styles.docName} numberOfLines={1}>
                                         {item.name}
                                     </Text>
                                 </View>
                             )}
-                            <View style={styles.cardMeta}>
-                                <Text style={styles.metaText}>~{item.estimatedTokens} tok</Text>
+
+                            <View style={styles.assetFooter}>
+                                <Text style={styles.tokenText}>
+                                    {item.isProcessing
+                                        ? 'Preprocessing...'
+                                        : item.extractedText
+                                            ? `✓ OCR Found (${item.extractedText.length} chars) • Grounded`
+                                            : `~${item.estimatedTokens} visual tokens`}
+                                </Text>
                                 <TouchableOpacity
-                                    onPress={() => setAssets((prev) => prev.filter((a) => a.id !== item.id))}
+                                    onPress={() => {
+                                        setAssets((prev) => prev.filter((a) => a.id !== item.id));
+                                        setIsVisualGrounded(false);
+                                    }}
                                 >
                                     <Text style={styles.deleteText}>✕</Text>
                                 </TouchableOpacity>
                             </View>
                         </View>
-                    )}
-                />
+                    ))}
+                </View>
             )}
 
-            <View style={styles.promptContainer}>
-                <TextInput
-                    style={styles.promptInput}
-                    placeholder="Ask a question about the attached documents or images..."
-                    placeholderTextColor="#64748B"
-                    value={prompt}
-                    onChangeText={setPrompt}
-                    multiline
-                />
-                <TouchableOpacity
-                    style={[styles.runBtn, isProcessing && styles.stopBtn]}
-                    onPress={isProcessing ? () => llm.stopCompletion() : handleExecuteStudio}
-                >
-                    <Text style={styles.runBtnText}>{isProcessing ? 'Stop' : 'Analyze'}</Text>
-                </TouchableOpacity>
-            </View>
-
+            {/* Telemetry Bar */}
             {metrics && (
                 <View style={styles.telemetryBar}>
                     <Text style={styles.telemetryText}>
-                        ⚡ {metrics.tokensPerSecond} t/s | TTFT: {metrics.ttftMs}ms | Generated: {metrics.totalTokens} tokens
+                        Speed: {metrics.tokensPerSecond} t/s | TTFT: {metrics.ttftMs}ms | Generated: {metrics.totalTokens} tokens
                     </Text>
                 </View>
             )}
 
-            <ScrollView style={styles.outputScroll} contentContainerStyle={styles.outputContent}>
-                {isProcessing && !output && (
-                    <View style={styles.loadingBox}>
-                        <ActivityIndicator color="#38BDF8" size="small" />
-                        <Text style={styles.loadingText}>Processing visual and text tokens...</Text>
-                    </View>
-                )}
-                {output ? (
-                    <Text style={styles.outputText}>{output}</Text>
-                ) : (
-                    !isProcessing && (
-                        <Text style={styles.placeholderText}>
-                            Ephemeral analysis output will stream here. State is maintained in memory and will not be saved to conversation history.
-                        </Text>
-                    )
-                )}
-            </ScrollView>
+            {/* Multi-Turn Studio Chat Stream */}
+            <KeyboardAvoidingView
+                style={styles.flexFill}
+                behavior={Platform.OS === 'ios' ? 'padding' : 'height'}
+            >
+                <FlatList
+                    ref={flatListRef}
+                    data={messages}
+                    keyExtractor={(item) => item.id}
+                    style={styles.messageList}
+                    contentContainerStyle={[styles.messageListContent, { paddingBottom: 16 }]}
+                    keyboardShouldPersistTaps="handled"
+                    onContentSizeChange={() => flatListRef.current?.scrollToEnd({ animated: true })}
+                    ListEmptyComponent={
+                        <View style={styles.emptyContainer}>
+                            <Text style={styles.emptyTitle}>Ephemeral Visual Workspace</Text>
+                            <Text style={styles.emptyDesc}>
+                                Take a photo or pick an image above. Ask questions, extract text, or invoke tools
+                                (e.g., search the creator or calculate items in frame). Subsequent questions will
+                                stream with fast text-level TTFT.
+                            </Text>
+                        </View>
+                    }
+                    renderItem={({ item }) => (
+                        <View
+                            style={[
+                                styles.bubble,
+                                item.role === 'user' ? styles.userBubble : styles.assistantBubble,
+                            ]}
+                        >
+                            <Text style={styles.bubbleText}>{item.content}</Text>
+                        </View>
+                    )}
+                    ListFooterComponent={
+                        streamingContent ? (
+                            <View style={[styles.bubble, styles.assistantBubble]}>
+                                <Text style={styles.bubbleText}>{streamingContent}</Text>
+                            </View>
+                        ) : null
+                    }
+                />
+
+                {/* Input Bar */}
+                <View style={[styles.inputContainer, { paddingBottom: Math.max(insets.bottom, 8) }]}>
+                    <TextInput
+                        style={styles.textInput}
+                        placeholder={
+                            isGenerating
+                                ? 'Generating response...'
+                                : isImagePreProcessing
+                                    ? 'Preprocessing image...'
+                                    : 'Ask a question about this image/doc...'
+                        }
+                        placeholderTextColor="#64748B"
+                        value={prompt}
+                        onChangeText={setPrompt}
+                        editable={!isGenerating && !isImagePreProcessing}
+                        multiline
+                    />
+
+                    {isGenerating ? (
+                        <TouchableOpacity style={styles.stopBtn} onPress={() => llm.stopCompletion()}>
+                            <Text style={styles.btnText}>Stop</Text>
+                        </TouchableOpacity>
+                    ) : (
+                        <TouchableOpacity
+                            style={[
+                                styles.sendBtn,
+                                (!prompt.trim() && assets.length === 0) && styles.disabledBtn,
+                            ]}
+                            onPress={handleSendMessage}
+                            disabled={(!prompt.trim() && assets.length === 0) || isImagePreProcessing}
+                        >
+                            <Text style={styles.btnText}>Send</Text>
+                        </TouchableOpacity>
+                    )}
+                </View>
+            </KeyboardAvoidingView>
+
+            {/* Direct Model Switcher Modal inside Studio */}
+            <ModelRegistryModal
+                visible={isRegistryOpen}
+                onClose={() => setRegistryOpen(false)}
+                onSelectChatModel={async (model) => {
+                    setRegistryOpen(false);
+                    if (onSelectModel) {
+                        await onSelectModel(model);
+                    }
+                }}
+            />
         </View>
     );
 };
 
 const styles = StyleSheet.create({
     container: { flex: 1, backgroundColor: '#0F172A' },
+    flexFill: { flex: 1 },
     header: {
         flexDirection: 'row',
-        justifyContent: 'space-between',
         alignItems: 'center',
-        paddingHorizontal: 16,
+        justifyContent: 'space-between',
+        paddingHorizontal: 12,
         paddingVertical: 10,
         borderBottomWidth: 1,
         borderBottomColor: '#1E293B',
     },
-    headerLeft: { flexDirection: 'row', alignItems: 'center', gap: 10 },
-    backBtn: { paddingVertical: 4, paddingHorizontal: 6 },
+    backBtn: { paddingVertical: 4, paddingHorizontal: 8, flexShrink: 0 },
     backBtnText: { color: '#38BDF8', fontSize: 16, fontWeight: '600' },
-    headerTitle: { color: '#F8FAFC', fontSize: 17, fontWeight: '700' },
-    badge: {
-        paddingHorizontal: 8,
-        paddingVertical: 2,
-        borderRadius: 6,
-        alignSelf: 'flex-start',
-        marginTop: 3,
-    },
+    headerCenter: { flex: 1, marginHorizontal: 8, alignItems: 'center' },
+    headerTitle: { color: '#F8FAFC', fontSize: 16, fontWeight: '700' },
+    badge: { maxWidth: '100%', paddingHorizontal: 8, paddingVertical: 2, borderRadius: 6, marginTop: 2 },
     badgeText: { backgroundColor: '#0284C720' },
     badgeVision: { backgroundColor: '#10B98120' },
-    badgeLabel: { color: '#38BDF8', fontSize: 11, fontWeight: '700' },
-    resetBtn: {
-        backgroundColor: '#334155',
-        paddingHorizontal: 12,
-        paddingVertical: 6,
-        borderRadius: 6,
-    },
+    badgeLabel: { color: '#38BDF8', fontSize: 11, fontWeight: '700', flexShrink: 1 },
+    resetBtn: { backgroundColor: '#334155', paddingHorizontal: 10, paddingVertical: 6, borderRadius: 6, flexShrink: 0 },
     resetText: { color: '#F8FAFC', fontSize: 12, fontWeight: '600' },
-    actionBar: {
-        flexDirection: 'row',
-        paddingHorizontal: 16,
-        paddingVertical: 10,
-        gap: 8,
-        backgroundColor: '#1E293B40',
-    },
+    actionBar: { flexDirection: 'row', paddingHorizontal: 16, paddingVertical: 8, gap: 8 },
     actionBtn: {
         flex: 1,
         backgroundColor: '#1E293B',
@@ -328,79 +499,64 @@ const styles = StyleSheet.create({
         borderColor: '#334155',
     },
     actionBtnText: { color: '#F8FAFC', fontSize: 12, fontWeight: '600' },
-    carousel: { maxHeight: 115, marginVertical: 6 },
-    carouselContent: { paddingHorizontal: 16, gap: 10 },
-    card: {
-        width: 95,
-        backgroundColor: '#1E293B',
-        borderRadius: 8,
-        overflow: 'hidden',
-        borderWidth: 1,
-        borderColor: '#334155',
-    },
-    thumbImage: { width: '100%', height: 70 },
-    docPlaceholder: {
-        width: '100%',
-        height: 70,
-        backgroundColor: '#0F172A',
+    assetContainer: { paddingHorizontal: 16, marginBottom: 6 },
+    assetCard: { backgroundColor: '#1E293B', borderRadius: 8, overflow: 'hidden', borderWidth: 1, borderColor: '#334155' },
+    imageWrap: { width: '100%', height: 100, backgroundColor: '#0F172A', position: 'relative' },
+    thumbImage: { width: '100%', height: '100%', resizeMode: 'cover' },
+    processingOverlay: {
+        ...StyleSheet.absoluteFillObject,
+        backgroundColor: 'rgba(15, 23, 42, 0.85)',
         justifyContent: 'center',
         alignItems: 'center',
-        padding: 4,
+        gap: 6,
     },
-    docIcon: { fontSize: 22 },
-    docName: { color: '#94A3B8', fontSize: 9, textAlign: 'center', marginTop: 2 },
-    cardMeta: {
+    processingText: { color: '#38BDF8', fontSize: 12, fontWeight: '600' },
+    docWrap: { height: 50, flexDirection: 'row', alignItems: 'center', paddingHorizontal: 12, gap: 8, backgroundColor: '#0F172A' },
+    docIcon: { fontSize: 18 },
+    docName: { color: '#F8FAFC', fontSize: 12, flex: 1 },
+    assetFooter: {
         flexDirection: 'row',
         justifyContent: 'space-between',
-        paddingHorizontal: 6,
-        paddingVertical: 3,
+        paddingHorizontal: 10,
+        paddingVertical: 5,
+        backgroundColor: '#1E293B',
         alignItems: 'center',
     },
-    metaText: { color: '#64748B', fontSize: 9 },
-    deleteText: { color: '#EF4444', fontSize: 11, fontWeight: '700' },
-    promptContainer: {
+    tokenText: { color: '#94A3B8', fontSize: 11 },
+    deleteText: { color: '#EF4444', fontSize: 13, fontWeight: '700', paddingHorizontal: 4 },
+    telemetryBar: { backgroundColor: '#0284C715', paddingVertical: 4, alignItems: 'center' },
+    telemetryText: { color: '#38BDF8', fontSize: 11, fontFamily: 'monospace' },
+    messageList: { flex: 1, paddingHorizontal: 16 },
+    messageListContent: { paddingTop: 12 },
+    emptyContainer: { padding: 24, alignItems: 'center', marginTop: 40 },
+    emptyTitle: { color: '#F8FAFC', fontSize: 16, fontWeight: '700', marginBottom: 8 },
+    emptyDesc: { color: '#64748B', fontSize: 13, textAlign: 'center', lineHeight: 20 },
+    bubble: { maxWidth: '85%', padding: 12, borderRadius: 12, marginBottom: 10 },
+    userBubble: { backgroundColor: '#2563EB', alignSelf: 'flex-end', borderBottomRightRadius: 2 },
+    assistantBubble: { backgroundColor: '#1E293B', alignSelf: 'flex-start', borderBottomLeftRadius: 2 },
+    bubbleText: { color: '#F8FAFC', fontSize: 14, lineHeight: 20 },
+    inputContainer: {
         flexDirection: 'row',
-        paddingHorizontal: 16,
-        paddingVertical: 8,
+        alignItems: 'center',
+        paddingHorizontal: 12,
+        paddingTop: 8,
+        backgroundColor: '#0F172A',
+        borderTopWidth: 1,
+        borderTopColor: '#1E293B',
         gap: 8,
-        alignItems: 'flex-end',
     },
-    promptInput: {
+    textInput: {
         flex: 1,
         backgroundColor: '#1E293B',
         color: '#F8FAFC',
         borderRadius: 8,
-        padding: 10,
-        fontSize: 13,
+        paddingHorizontal: 12,
+        paddingVertical: 8,
+        fontSize: 14,
         maxHeight: 90,
     },
-    runBtn: {
-        backgroundColor: '#2563EB',
-        paddingVertical: 12,
-        paddingHorizontal: 16,
-        borderRadius: 8,
-    },
-    stopBtn: { backgroundColor: '#DC2626' },
-    runBtnText: { color: '#FFFFFF', fontSize: 13, fontWeight: '700' },
-    telemetryBar: {
-        backgroundColor: '#0284C715',
-        paddingVertical: 4,
-        alignItems: 'center',
-        marginHorizontal: 16,
-        borderRadius: 4,
-    },
-    telemetryText: { color: '#38BDF8', fontSize: 11, fontFamily: 'monospace' },
-    outputScroll: {
-        flex: 1,
-        margin: 16,
-        backgroundColor: '#1E293B30',
-        borderRadius: 8,
-        borderWidth: 1,
-        borderColor: '#1E293B',
-    },
-    outputContent: { padding: 14 },
-    outputText: { color: '#F8FAFC', fontSize: 14, lineHeight: 22 },
-    placeholderText: { color: '#64748B', fontSize: 13, lineHeight: 20 },
-    loadingBox: { flexDirection: 'row', gap: 8, alignItems: 'center' },
-    loadingText: { color: '#38BDF8', fontSize: 12 },
+    sendBtn: { backgroundColor: '#2563EB', paddingVertical: 10, paddingHorizontal: 16, borderRadius: 8 },
+    stopBtn: { backgroundColor: '#DC2626', paddingVertical: 10, paddingHorizontal: 16, borderRadius: 8 },
+    disabledBtn: { opacity: 0.4 },
+    btnText: { color: '#FFFFFF', fontWeight: '600', fontSize: 13 },
 });
