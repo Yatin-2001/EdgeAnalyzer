@@ -1,48 +1,51 @@
-import React, { useState, useRef, useEffect } from 'react';
+import React, { useEffect, useState, useRef } from 'react';
 import {
-  StyleSheet,
-  Text,
   View,
+  Text,
   TextInput,
   TouchableOpacity,
   FlatList,
-  StatusBar,
   ActivityIndicator,
   Alert,
+  StatusBar,
   KeyboardAvoidingView,
   Platform,
+  StyleSheet,
 } from 'react-native';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 
-import { LLMService, LLMStatus, PerformanceMetrics } from '@/src/services/LLMService';
-import { ModelManager } from '@/src/services/ModelManager';
-import { ContextManager } from '@/src/services/ContextManager';
-import { EmbeddingService } from '@/src/services/EmbeddingService';
-import { SemanticMemoryService } from '@/src/services/SemanticMemoryService';
 import {
   getAllConversations,
   createConversation,
+  updateConversationTitle,
   deleteConversation,
   getMessagesByConversation,
   insertMessage,
-  updateConversationTitle,
   getDefaultChatModel,
   getModelById,
   ConversationRecord,
   MessageRecord,
   ModelRecord,
-} from '@/src/database/repository';
-import { ModelRegistryModal } from '@/src/components/ModelRegistryModal';
-import { ConversationDrawer } from '@/src/components/ConversationDrawer';
-import { ToolOrchestrator } from '@/src/services/ToolOrchestrator';
-import { SecureStorageService, SearchProvider } from '@/src/services/SecureStorageService';
-import { SearchSettingsModal } from '@/src/components/SearchSettingsModal';
-import { StudioScreen } from '@/src/screens/StudioScreen';
+} from '../src/database/repository';
 
+import { LLMService, LLMStatus, PerformanceMetrics } from '../src/services/LLMService';
+import { ModelManager } from '../src/services/ModelManager';
+import { EmbeddingService } from '../src/services/EmbeddingService';
+import { SemanticMemoryService } from '../src/services/SemanticMemoryService';
+import { ToolOrchestrator } from '../src/services/ToolOrchestrator';
+import { ContextManager } from '../src/services/ContextManager';
+import { SecureStorageService, SearchProvider } from '../src/services/SecureStorageService';
 
+import { ConversationDrawer } from '../src/components/ConversationDrawer';
+import { ModelRegistryModal } from '../src/components/ModelRegistryModal';
+import { SearchSettingsModal } from '../src/components/SearchSettingsModal';
+
+import { StudioScreen } from '../src/screens/StudioScreen';
+import { MindspaceHomeScreen } from '../src/screens/mindspace/MindspaceHomeScreen';
+import { NotebookDetailScreen } from '../src/screens/mindspace/NotebookDetailScreen';
 
 export default function ChatScreen() {
-  const [activeTab, setActiveTab] = useState<'chat' | 'studio'>('chat');
+  const [activeTab, setActiveTab] = useState<'chat' | 'studio' | 'mindspace'>('chat');
   const [conversations, setConversations] = useState<ConversationRecord[]>([]);
   const [activeConv, setActiveConv] = useState<ConversationRecord | null>(null);
   const [messages, setMessages] = useState<MessageRecord[]>([]);
@@ -55,25 +58,22 @@ export default function ChatScreen() {
 
   const [isRegistryOpen, setRegistryOpen] = useState(false);
   const [isDrawerOpen, setDrawerOpen] = useState(false);
+  const [isSearchConfigOpen, setSearchConfigOpen] = useState(false);
+  const [searchProvider, setSearchProvider] = useState<SearchProvider>('tavily_keyless');
+
+  const [activeNotebookId, setActiveNotebookId] = useState<string | null>(null);
 
   const insets = useSafeAreaInsets();
   const llm = useRef(LLMService.getInstance()).current;
   const modelManager = useRef(ModelManager.getInstance()).current;
   const embeddingService = useRef(EmbeddingService.getInstance()).current;
   const memoryService = useRef(SemanticMemoryService.getInstance()).current;
-  const flatListRef = useRef<FlatList>(null);
-
   const toolOrchestrator = useRef(ToolOrchestrator.getInstance()).current;
-
-  const [searchProvider, setSearchProvider] = useState<SearchProvider>('tavily_keyless');
-  const [isSearchConfigOpen, setSearchConfigOpen] = useState(false);
+  const flatListRef = useRef<FlatList>(null);
 
   useEffect(() => {
     (async () => {
-      // 1. Initialize dedicated embedding engine in the background
       await embeddingService.initialize();
-
-      // 2. Load conversations and active chat session
       const allConvs = await getAllConversations();
       setConversations(allConvs);
       if (allConvs.length > 0) {
@@ -95,17 +95,6 @@ export default function ChatScreen() {
       setSearchProvider(activeSearch);
     })();
   }, []);
-
-  const handleQuickToggleSearch = async () => {
-    const key = await SecureStorageService.getBraveApiKey();
-    if (!key) {
-      setSearchConfigOpen(true);
-      return;
-    }
-    const next = searchProvider === 'tavily_keyless' ? 'brave_custom' : 'tavily_keyless';
-    await SecureStorageService.setActiveSearchProvider(next);
-    setSearchProvider(next);
-  };
 
   const switchConversation = async (conv: ConversationRecord) => {
     setActiveConv(conv);
@@ -189,7 +178,7 @@ export default function ChatScreen() {
         mmprojWorkingPath = mmprojInfo.workingUri || undefined;
       }
 
-      // 3. Load on Adreno GPU with multimodal projector attached
+      // 3. Load on GPU
       await llm.loadModel(
           prepared.workingUri,
           prepared.originalName,
@@ -226,7 +215,7 @@ export default function ChatScreen() {
             'You are a helpful, concise AI assistant running locally on-device.') +
         memoryContext.formattedSystemContext;
 
-    // 2. Inject Tool Schema with Anti-Refusal System Prompt
+    // 2. Inject Tool Schema
     const systemWithTools = toolOrchestrator.formatSystemPromptWithTools(
         baseSystem,
         userText
@@ -246,20 +235,14 @@ export default function ChatScreen() {
           formattedPrompt,
           userText,
           {
-            onToken: (token) => {
-              setStreamingContent((prev) => prev + token);
-            },
+            onToken: (token) => setStreamingContent((prev) => prev + token),
             onMetrics: (m) => setMetrics(m),
             onToolCallDetected: (toolName, _, step) => {
-              setStreamingContent(
-                  (prev) => prev + `⚙️ [Step ${step}] Executing tool: ${toolName}...\n`
-              );
+              setStreamingContent((prev) => prev + `⚙️ [Step ${step}] Executing: ${toolName}...\n`);
             },
             onToolExecutionCompleted: (toolName, res, step) => {
               setStreamingContent(
-                  (prev) =>
-                      prev +
-                      `✓ [Step ${step}] ${toolName} completed (${res.executionTimeMs}ms)\n\n`
+                  (prev) => prev + `✓ [Step ${step}] ${toolName} finished (${res.executionTimeMs}ms)\n\n`
               );
             },
           }
@@ -276,7 +259,7 @@ export default function ChatScreen() {
       setStreamingContent('');
       setStatus(llm.getStatus());
 
-      // Background title update & memory indexing
+      // Auto-title update
       if (activeConv.is_custom_title === 0) {
         const turnCount = updatedMessages.filter((m) => m.role === 'user').length;
         if (turnCount === 1 || turnCount === 3) {
@@ -300,20 +283,47 @@ export default function ChatScreen() {
     }
   };
 
+  // Studio Screen Routing
   if (activeTab === 'studio') {
-    return <StudioScreen onBackToChat={() => setActiveTab('chat')} />;
+    return (
+        <StudioScreen
+            onBackToChat={() => setActiveTab('chat')}
+            onSelectModel={async (model) => {
+              await ensureModelLoaded(model.id);
+            }}
+        />
+    );
   }
 
+// MindSpace Screen Tab Routing
+  if (activeTab === 'mindspace') {
+    if (activeNotebookId) {
+      return (
+          <NotebookDetailScreen
+              notebookId={activeNotebookId}
+              onBack={() => setActiveNotebookId(null)}
+              onSelectModel={async (model) => {
+                await ensureModelLoaded(model.id);
+              }}
+          />
+      );
+    }
+    return (
+        <MindspaceHomeScreen
+            onSelectNotebook={(id) => setActiveNotebookId(id)}
+            onBackToChat={() => setActiveTab('chat')}
+        />
+    );
+  }
+
+  // Clean Main Chat Screen
   return (
       <View style={[styles.screen, { paddingTop: insets.top }]}>
         <StatusBar barStyle="light-content" backgroundColor="#0F172A" />
 
-        {/* Top Header */}
+        {/* Clean Top Bar: Drawer (☰) | Title & Model Selector | Settings (⚙) */}
         <View style={styles.topBar}>
-          <TouchableOpacity
-              style={styles.iconBtn}
-              onPress={() => setDrawerOpen(true)}
-          >
+          <TouchableOpacity style={styles.iconBtn} onPress={() => setDrawerOpen(true)}>
             <Text style={styles.iconText}>☰</Text>
           </TouchableOpacity>
 
@@ -321,54 +331,23 @@ export default function ChatScreen() {
             <Text style={styles.chatTitleText} numberOfLines={1}>
               {activeConv?.title || 'Chat'}
             </Text>
-            <TouchableOpacity onPress={() => setRegistryOpen(true)}>
-              <Text style={styles.modelSubtext}>
+            <TouchableOpacity onPress={() => setRegistryOpen(true)} activeOpacity={0.7}>
+              <Text style={styles.modelSubtext} numberOfLines={1}>
                 {llm.getLoadedModel()?.name || 'No Model Loaded ▾'}
               </Text>
             </TouchableOpacity>
           </View>
 
-          {/* Switch to Studio Tab */}
-          <TouchableOpacity
-              style={styles.studioTabBtn}
-              onPress={() => setActiveTab('studio')}
-          >
-            <Text style={styles.studioTabText}>🎨 Studio</Text>
-          </TouchableOpacity>
-
-          {/* Quick Search Engine Switcher Badge */}
-          <TouchableOpacity
-              style={[
-                styles.searchPillBtn,
-                searchProvider === 'brave_custom' && styles.searchPillBtnActive,
-              ]}
-              onPress={handleQuickToggleSearch}
-          >
-            <Text
-                style={[
-                  styles.searchPillText,
-                  searchProvider === 'brave_custom' && styles.searchPillTextActive,
-                ]}
-            >
-              {searchProvider === 'brave_custom' ? '⚡ Brave Pro' : '🌐 Keyless'}
-            </Text>
-          </TouchableOpacity>
-
-          <TouchableOpacity
-              style={styles.iconBtn}
-              onPress={() => setRegistryOpen(true)}
-          >
+          <TouchableOpacity style={styles.iconBtn} onPress={() => setRegistryOpen(true)}>
             <Text style={styles.iconText}>⚙</Text>
           </TouchableOpacity>
         </View>
 
-        {/* Gated Loader Banner */}
+        {/* Model Loading Banner */}
         {status === 'LOADING' && (
             <View style={styles.loadingBanner}>
               <ActivityIndicator size="small" color="#38BDF8" />
-              <Text style={styles.loadingText}>
-                Loading Engine & Weights: {loadProgress}%
-              </Text>
+              <Text style={styles.loadingText}>Loading Weights: {loadProgress}%</Text>
             </View>
         )}
 
@@ -376,12 +355,12 @@ export default function ChatScreen() {
         {metrics && status !== 'LOADING' && (
             <View style={styles.telemetryBar}>
               <Text style={styles.telemetryText}>
-                Speed: {metrics.tokensPerSecond} t/s | TTFT: {metrics.ttftMs}ms | Tokens: {metrics.totalTokens}
+                ⚡ {metrics.tokensPerSecond} t/s | TTFT: {metrics.ttftMs}ms | Generated: {metrics.totalTokens} tokens
               </Text>
             </View>
         )}
 
-        {/* Message Stream with Keyboard-Aware Input Box */}
+        {/* Message Feed */}
         <KeyboardAvoidingView
             style={styles.flexFill}
             behavior={Platform.OS === 'ios' ? 'padding' : 'height'}
@@ -391,13 +370,8 @@ export default function ChatScreen() {
               data={messages}
               keyExtractor={(item) => item.id}
               style={styles.messageList}
-              contentContainerStyle={[
-                styles.messageListContent,
-                { paddingBottom: 16 },
-              ]}
-              onContentSizeChange={() =>
-                  flatListRef.current?.scrollToEnd({ animated: true })
-              }
+              contentContainerStyle={[styles.messageListContent, { paddingBottom: 16 }]}
+              onContentSizeChange={() => flatListRef.current?.scrollToEnd({ animated: true })}
               renderItem={({ item }) => (
                   <View
                       style={[
@@ -417,12 +391,8 @@ export default function ChatScreen() {
               }
           />
 
-          <View
-              style={[
-                styles.inputContainer,
-                { paddingBottom: insets.bottom },
-              ]}
-          >
+          {/* Input Bar */}
+          <View style={[styles.inputContainer, { paddingBottom: Math.max(insets.bottom, 8) }]}>
             <TextInput
                 style={styles.textInput}
                 placeholder={
@@ -440,10 +410,7 @@ export default function ChatScreen() {
             />
 
             {status === 'GENERATING' ? (
-                <TouchableOpacity
-                    style={styles.stopBtn}
-                    onPress={() => llm.stopCompletion()}
-                >
+                <TouchableOpacity style={styles.stopBtn} onPress={() => llm.stopCompletion()}>
                   <Text style={styles.btnText}>Stop</Text>
                 </TouchableOpacity>
             ) : (
@@ -461,17 +428,29 @@ export default function ChatScreen() {
           </View>
         </KeyboardAvoidingView>
 
+        {/* Navigation Drawer */}
         <ConversationDrawer
             visible={isDrawerOpen}
             conversations={conversations}
             activeId={activeConv?.id || null}
+            activeTab={activeTab}
+            searchProvider={searchProvider}
+            onSelectTab={(tab) => {
+              setActiveNotebookId(null);
+              setActiveTab(tab);
+            }}
             onSelect={switchConversation}
             onNew={handleNewConversation}
             onDelete={handleDeleteConversation}
             onRename={handleRenameConversation}
+            onOpenSearchSettings={() => {
+              setDrawerOpen(false);
+              setSearchConfigOpen(true);
+            }}
             onClose={() => setDrawerOpen(false)}
         />
 
+        {/* Model Registry Modal */}
         <ModelRegistryModal
             visible={isRegistryOpen}
             onClose={() => setRegistryOpen(false)}
@@ -482,6 +461,7 @@ export default function ChatScreen() {
             }}
         />
 
+        {/* Search Settings Modal */}
         <SearchSettingsModal
             visible={isSearchConfigOpen}
             onClose={() => setSearchConfigOpen(false)}
@@ -498,76 +478,36 @@ const styles = StyleSheet.create({
     height: 52,
     flexDirection: 'row',
     alignItems: 'center',
+    justifyContent: 'space-between',
     paddingHorizontal: 12,
     borderBottomWidth: 1,
     borderBottomColor: '#1E293B',
-    gap: 6,
   },
-  headerTitleWrap: { flex: 1, alignItems: 'center' },
-  chatTitleText: { color: '#F8FAFC', fontSize: 16, fontWeight: '700' },
-  modelSubtext: { color: '#38BDF8', fontSize: 12, marginTop: 2 },
-  studioTabBtn: {
-    backgroundColor: '#334155',
-    paddingHorizontal: 8,
-    paddingVertical: 5,
-    borderRadius: 14,
-  },
-  studioTabText: { color: '#F8FAFC', fontSize: 11, fontWeight: '700' },
-  searchPillBtn: {
-    backgroundColor: '#1E293B',
-    paddingHorizontal: 10,
-    paddingVertical: 5,
-    borderRadius: 14,
-    borderWidth: 1,
-    borderColor: '#334155',
-  },
-  searchPillBtnActive: {
-    backgroundColor: '#0284C720',
-    borderColor: '#38BDF8',
-  },
-  searchPillText: {
-    color: '#94A3B8',
-    fontSize: 11,
-    fontWeight: '700',
-  },
-  searchPillTextActive: {
-    color: '#38BDF8',
-  },
-  iconBtn: { padding: 6 },
-  iconText: { color: '#94A3B8', fontSize: 20 },
+  iconBtn: { padding: 8 },
+  iconText: { color: '#38BDF8', fontSize: 20, fontWeight: '700' },
+  headerTitleWrap: { flex: 1, alignItems: 'center', marginHorizontal: 8 },
+  chatTitleText: { color: '#F8FAFC', fontSize: 15, fontWeight: '700' },
+  modelSubtext: { color: '#38BDF8', fontSize: 11, fontWeight: '600', marginTop: 1 },
   loadingBanner: {
     flexDirection: 'row',
     alignItems: 'center',
     justifyContent: 'center',
-    backgroundColor: '#1E293B',
-    paddingVertical: 8,
+    backgroundColor: '#0284C720',
+    paddingVertical: 6,
     gap: 8,
   },
   loadingText: { color: '#38BDF8', fontSize: 12, fontWeight: '600' },
   telemetryBar: {
-    backgroundColor: '#0284C720',
+    backgroundColor: '#0284C715',
     paddingVertical: 4,
     alignItems: 'center',
   },
   telemetryText: { color: '#38BDF8', fontSize: 11, fontFamily: 'monospace' },
-  messageList: { flex: 1, paddingHorizontal: 16 },
-  messageListContent: { paddingTop: 16 },
-  bubble: {
-    maxWidth: '85%',
-    padding: 12,
-    borderRadius: 12,
-    marginBottom: 10,
-  },
-  userBubble: {
-    backgroundColor: '#2563EB',
-    alignSelf: 'flex-end',
-    borderBottomRightRadius: 2,
-  },
-  assistantBubble: {
-    backgroundColor: '#1E293B',
-    alignSelf: 'flex-start',
-    borderBottomLeftRadius: 2,
-  },
+  messageList: { flex: 1, paddingHorizontal: 12 },
+  messageListContent: { paddingTop: 12 },
+  bubble: { maxWidth: '85%', padding: 12, borderRadius: 12, marginBottom: 10 },
+  userBubble: { backgroundColor: '#2563EB', alignSelf: 'flex-end', borderBottomRightRadius: 2 },
+  assistantBubble: { backgroundColor: '#1E293B', alignSelf: 'flex-start', borderBottomLeftRadius: 2 },
   bubbleText: { color: '#F8FAFC', fontSize: 14, lineHeight: 20 },
   inputContainer: {
     flexDirection: 'row',
@@ -587,20 +527,10 @@ const styles = StyleSheet.create({
     paddingHorizontal: 12,
     paddingVertical: 8,
     fontSize: 14,
-    maxHeight: 100,
+    maxHeight: 90,
   },
-  sendBtn: {
-    backgroundColor: '#2563EB',
-    paddingVertical: 10,
-    paddingHorizontal: 16,
-    borderRadius: 8,
-  },
-  stopBtn: {
-    backgroundColor: '#DC2626',
-    paddingVertical: 10,
-    paddingHorizontal: 16,
-    borderRadius: 8,
-  },
+  sendBtn: { backgroundColor: '#2563EB', paddingVertical: 10, paddingHorizontal: 16, borderRadius: 8 },
+  stopBtn: { backgroundColor: '#DC2626', paddingVertical: 10, paddingHorizontal: 16, borderRadius: 8 },
   disabledBtn: { opacity: 0.4 },
   btnText: { color: '#FFFFFF', fontWeight: '600', fontSize: 13 },
 });

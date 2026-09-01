@@ -1,4 +1,4 @@
-import React, { useState, useEffect } from 'react';
+import React from 'react';
 import {
     Modal,
     View,
@@ -6,205 +6,212 @@ import {
     StyleSheet,
     TouchableOpacity,
     FlatList,
-    TextInput,
+    TouchableWithoutFeedback,
+    Alert,
 } from 'react-native';
+import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import { ConversationRecord } from '../database/repository';
-import {
-    SemanticMemoryService,
-    ConversationSearchResult,
-} from '../services/SemanticMemoryService';
+import { SearchProvider } from '../services/SecureStorageService';
 
-export interface ConversationDrawerProps {
+interface Props {
     visible: boolean;
     conversations: ConversationRecord[];
     activeId: string | null;
+    activeTab: 'chat' | 'studio' | 'mindspace';
+    searchProvider: SearchProvider;
+    onSelectTab: (tab: 'chat' | 'studio' | 'mindspace') => void;
     onSelect: (conv: ConversationRecord) => void;
     onNew: () => void;
     onDelete: (id: string) => void;
     onRename: (id: string, newTitle: string) => void;
+    onOpenSearchSettings: () => void;
     onClose: () => void;
 }
 
-export const ConversationDrawer: React.FC<ConversationDrawerProps> = ({
-                                                                          visible,
-                                                                          conversations,
-                                                                          activeId,
-                                                                          onSelect,
-                                                                          onNew,
-                                                                          onDelete,
-                                                                          onRename,
-                                                                          onClose,
-                                                                      }) => {
-    const [searchQuery, setSearchQuery] = useState('');
-    const [searchResults, setSearchResults] = useState<ConversationSearchResult[]>([]);
-    const [isSearching, setIsSearching] = useState(false);
+export const ConversationDrawer: React.FC<Props> = ({
+                                                        visible,
+                                                        conversations,
+                                                        activeId,
+                                                        activeTab,
+                                                        searchProvider,
+                                                        onSelectTab,
+                                                        onSelect,
+                                                        onNew,
+                                                        onDelete,
+                                                        onRename,
+                                                        onOpenSearchSettings,
+                                                        onClose,
+                                                    }) => {
+    const insets = useSafeAreaInsets();
 
-    const [editingConv, setEditingConv] = useState<ConversationRecord | null>(null);
-    const [editTitleText, setEditTitleText] = useState('');
-
-    const memoryService = SemanticMemoryService.getInstance();
-
-    useEffect(() => {
-        if (!searchQuery.trim()) {
-            setSearchResults([]);
-            setIsSearching(false);
-            return;
-        }
-
-        const timer = setTimeout(async () => {
-            setIsSearching(true);
-            const res = await memoryService.searchConversations(searchQuery);
-            setSearchResults(res);
-            setIsSearching(false);
-        }, 250);
-
-        return () => clearTimeout(timer);
-    }, [searchQuery]);
-
-    const handleOpenRename = (conv: ConversationRecord) => {
-        setEditingConv(conv);
-        setEditTitleText(conv.title);
-    };
-
-    const handleSaveRename = () => {
-        if (editingConv && editTitleText.trim()) {
-            onRename(editingConv.id, editTitleText.trim());
-            setEditingConv(null);
-        }
+    const handleLongPress = (item: ConversationRecord) => {
+        Alert.alert(
+            item.title,
+            'Manage conversation thread',
+            [
+                {
+                    text: 'Rename',
+                    onPress: () => {
+                        Alert.prompt(
+                            'Rename Chat',
+                            'Enter a new title:',
+                            [
+                                { text: 'Cancel', style: 'cancel' },
+                                {
+                                    text: 'Save',
+                                    onPress: (newTitle?: string) => {
+                                        if (newTitle && newTitle.trim()) {
+                                            onRename(item.id, newTitle.trim());
+                                        }
+                                    },
+                                },
+                            ],
+                            'plain-text',
+                            item.title
+                        );
+                    },
+                },
+                {
+                    text: 'Delete',
+                    style: 'destructive',
+                    onPress: () => onDelete(item.id),
+                },
+                { text: 'Cancel', style: 'cancel' },
+            ],
+            { cancelable: true }
+        );
     };
 
     return (
-        <Modal visible={visible} animationType="fade" transparent>
+        <Modal visible={visible} animationType="fade" transparent onRequestClose={onClose}>
             <View style={styles.overlay}>
-                <View style={styles.drawerContainer}>
+                <TouchableWithoutFeedback onPress={onClose}>
+                    <View style={styles.backdrop} />
+                </TouchableWithoutFeedback>
+
+                <View style={[styles.drawer, { paddingTop: insets.top, paddingBottom: insets.bottom }]}>
+                    {/* Header */}
                     <View style={styles.header}>
-                        <Text style={styles.title}>Chats & Memory</Text>
-                        <TouchableOpacity onPress={onClose} style={{ padding: 4 }}>
-                            <Text style={styles.closeText}>✕</Text>
+                        <Text style={styles.headerTitle}>EdgeAnalyzer</Text>
+                        <TouchableOpacity onPress={onClose} style={styles.closeBtn}>
+                            <Text style={styles.closeBtnText}>✕</Text>
                         </TouchableOpacity>
                     </View>
 
-                    <TextInput
-                        style={styles.searchBar}
-                        placeholder="Search topic or context..."
-                        placeholderTextColor="#64748B"
-                        value={searchQuery}
-                        onChangeText={setSearchQuery}
-                    />
+                    {/* Top Workspace Navigator */}
+                    <View style={styles.workspaceSection}>
+                        <Text style={styles.sectionHeader}>WORKSPACES</Text>
+                        <TouchableOpacity
+                            style={[styles.workspaceItem, activeTab === 'chat' && styles.workspaceItemActive]}
+                            onPress={() => {
+                                onSelectTab('chat');
+                                onClose();
+                            }}
+                        >
+                            <Text style={styles.workspaceIcon}>💬</Text>
+                            <Text
+                                style={[
+                                    styles.workspaceText,
+                                    activeTab === 'chat' && styles.workspaceTextActive,
+                                ]}
+                            >
+                                Chat Assistant
+                            </Text>
+                        </TouchableOpacity>
 
+                        <TouchableOpacity
+                            style={[
+                                styles.workspaceItem,
+                                activeTab === 'studio' && styles.workspaceItemActive,
+                            ]}
+                            onPress={() => {
+                                onSelectTab('studio');
+                                onClose();
+                            }}
+                        >
+                            <Text style={styles.workspaceIcon}>🎨</Text>
+                            <Text
+                                style={[
+                                    styles.workspaceText,
+                                    activeTab === 'studio' && styles.workspaceTextActive,
+                                ]}
+                            >
+                                Visual Studio
+                            </Text>
+                        </TouchableOpacity>
+
+                        <TouchableOpacity
+                            style={[
+                                styles.workspaceItem,
+                                activeTab === 'mindspace' && styles.workspaceItemActive,
+                            ]}
+                            onPress={() => {
+                                onSelectTab('mindspace');
+                                onClose();
+                            }}
+                        >
+                            <Text style={styles.workspaceIcon}>📚</Text>
+                            <Text
+                                style={[
+                                    styles.workspaceText,
+                                    activeTab === 'mindspace' && styles.workspaceTextActive,
+                                ]}
+                            >
+                                MindSpace Notebooks
+                            </Text>
+                        </TouchableOpacity>
+                    </View>
+
+                    {/* New Chat Button */}
                     <TouchableOpacity style={styles.newChatBtn} onPress={onNew}>
-                        <Text style={styles.newChatText}>+ New Chat</Text>
+                        <Text style={styles.newChatText}>+ New Conversation</Text>
                     </TouchableOpacity>
 
-                    {searchQuery.trim().length > 0 ? (
-                        <FlatList
-                            data={searchResults}
-                            keyExtractor={(item) => item.conversation.id}
-                            ListHeaderComponent={
-                                <Text style={styles.sectionHeader}>
-                                    {isSearching ? 'Searching...' : `Context Matches (${searchResults.length})`}
-                                </Text>
-                            }
-                            renderItem={({ item }) => (
-                                <View
-                                    style={[
-                                        styles.chatItem,
-                                        item.conversation.id === activeId && styles.activeChatItem,
-                                    ]}
-                                >
-                                    <TouchableOpacity
-                                        style={{ flex: 1 }}
-                                        onPress={() => {
-                                            onSelect(item.conversation);
-                                            onClose();
-                                        }}
-                                    >
-                                        <Text style={styles.chatTitle} numberOfLines={1}>
-                                            {item.conversation.title}
-                                        </Text>
-                                        <Text style={styles.snippetText} numberOfLines={2}>
-                                            {item.relevanceSnippet}
-                                        </Text>
-                                    </TouchableOpacity>
-                                </View>
-                            )}
-                        />
-                    ) : (
+                    {/* Conversation History Section */}
+                    <View style={styles.historySection}>
+                        <Text style={styles.sectionHeader}>CONVERSATIONS</Text>
                         <FlatList
                             data={conversations}
                             keyExtractor={(item) => item.id}
-                            renderItem={({ item }) => (
-                                <View
-                                    style={[
-                                        styles.chatItem,
-                                        item.id === activeId && styles.activeChatItem,
-                                    ]}
-                                >
+                            contentContainerStyle={{ paddingBottom: 10 }}
+                            renderItem={({ item }) => {
+                                const isActive = item.id === activeId && activeTab === 'chat';
+                                return (
                                     <TouchableOpacity
-                                        style={{ flex: 1 }}
+                                        style={[styles.convItem, isActive && styles.convItemActive]}
                                         onPress={() => {
+                                            onSelectTab('chat');
                                             onSelect(item);
                                             onClose();
                                         }}
+                                        onLongPress={() => handleLongPress(item)}
+                                        delayLongPress={400}
                                     >
+                                        <Text style={styles.convIcon}>🗨️</Text>
                                         <Text
-                                            style={[
-                                                styles.chatTitle,
-                                                item.id === activeId && styles.activeChatTitle,
-                                            ]}
+                                            style={[styles.convTitle, isActive && styles.convTitleActive]}
                                             numberOfLines={1}
                                         >
                                             {item.title}
                                         </Text>
                                     </TouchableOpacity>
-
-                                    <TouchableOpacity
-                                        onPress={() => handleOpenRename(item)}
-                                        style={styles.iconBtn}
-                                    >
-                                        <Text style={styles.icon}>✏️</Text>
-                                    </TouchableOpacity>
-
-                                    <TouchableOpacity
-                                        onPress={() => onDelete(item.id)}
-                                        style={styles.iconBtn}
-                                    >
-                                        <Text style={styles.icon}>🗑</Text>
-                                    </TouchableOpacity>
-                                </View>
-                            )}
+                                );
+                            }}
                         />
-                    )}
+                    </View>
 
-                    {editingConv && (
-                        <Modal transparent animationType="fade">
-                            <View style={styles.modalBackdrop}>
-                                <View style={styles.renameCard}>
-                                    <Text style={styles.renameHeader}>Rename Chat</Text>
-                                    <TextInput
-                                        style={styles.renameInput}
-                                        value={editTitleText}
-                                        onChangeText={setEditTitleText}
-                                        autoFocus
-                                    />
-                                    <View style={styles.renameActions}>
-                                        <TouchableOpacity
-                                            onPress={() => setEditingConv(null)}
-                                            style={styles.cancelBtn}
-                                        >
-                                            <Text style={styles.actionText}>Cancel</Text>
-                                        </TouchableOpacity>
-                                        <TouchableOpacity
-                                            onPress={handleSaveRename}
-                                            style={styles.saveBtn}
-                                        >
-                                            <Text style={styles.saveText}>Save</Text>
-                                        </TouchableOpacity>
-                                    </View>
-                                </View>
+                    {/* Drawer Footer: Integrated Search Settings */}
+                    <View style={styles.footer}>
+                        <TouchableOpacity style={styles.searchSettingBtn} onPress={onOpenSearchSettings}>
+                            <View style={{ flex: 1 }}>
+                                <Text style={styles.searchSettingTitle}>Web Search Provider</Text>
+                                <Text style={styles.searchSettingSubtitle}>
+                                    {searchProvider === 'brave_custom' ? '⚡ Brave Pro (Custom Key)' : '🌐 Tavily Keyless'}
+                                </Text>
                             </View>
-                        </Modal>
-                    )}
+                            <Text style={styles.searchSettingAction}>Configure ⚙</Text>
+                        </TouchableOpacity>
+                    </View>
                 </View>
             </View>
         </Modal>
@@ -212,99 +219,95 @@ export const ConversationDrawer: React.FC<ConversationDrawerProps> = ({
 };
 
 const styles = StyleSheet.create({
-    overlay: {
-        flex: 1,
-        backgroundColor: 'rgba(0,0,0,0.65)',
-        flexDirection: 'row',
-    },
-    drawerContainer: {
+    overlay: { flex: 1, flexDirection: 'row' },
+    backdrop: { flex: 1, backgroundColor: 'rgba(0,0,0,0.6)' },
+    drawer: {
+        position: 'absolute',
+        left: 0,
+        top: 0,
+        bottom: 0,
         width: '80%',
+        maxWidth: 320,
         backgroundColor: '#0F172A',
-        padding: 16,
-        paddingTop: 48,
+        borderRightWidth: 1,
+        borderRightColor: '#1E293B',
+        paddingHorizontal: 16,
+        paddingTop: 16,
     },
     header: {
         flexDirection: 'row',
         justifyContent: 'space-between',
         alignItems: 'center',
-        marginBottom: 12,
+        marginBottom: 16,
     },
-    title: { color: '#F8FAFC', fontSize: 18, fontWeight: '700' },
-    closeText: { color: '#94A3B8', fontSize: 16 },
-    searchBar: {
-        backgroundColor: '#1E293B',
-        color: '#F8FAFC',
+    headerTitle: { color: '#F8FAFC', fontSize: 18, fontWeight: '800' },
+    closeBtn: { padding: 4 },
+    closeBtnText: { color: '#94A3B8', fontSize: 16, fontWeight: '700' },
+    workspaceSection: {
+        marginBottom: 16,
+        backgroundColor: '#1E293B40',
         borderRadius: 8,
-        paddingHorizontal: 12,
-        paddingVertical: 8,
-        fontSize: 13,
-        marginBottom: 12,
+        padding: 8,
+        borderWidth: 1,
+        borderColor: '#1E293B',
     },
+    sectionHeader: {
+        color: '#64748B',
+        fontSize: 10,
+        fontWeight: '700',
+        letterSpacing: 0.8,
+        marginBottom: 6,
+        paddingHorizontal: 4,
+    },
+    workspaceItem: {
+        flexDirection: 'row',
+        alignItems: 'center',
+        paddingVertical: 8,
+        paddingHorizontal: 10,
+        borderRadius: 6,
+        marginBottom: 2,
+        gap: 8,
+    },
+    workspaceItemActive: { backgroundColor: '#2563EB25' },
+    workspaceIcon: { fontSize: 15 },
+    workspaceText: { color: '#94A3B8', fontSize: 13, fontWeight: '600' },
+    workspaceTextActive: { color: '#38BDF8', fontWeight: '700' },
     newChatBtn: {
         backgroundColor: '#0284C7',
-        padding: 10,
+        paddingVertical: 10,
         borderRadius: 8,
         alignItems: 'center',
-        marginBottom: 16,
+        marginBottom: 14,
     },
-    newChatText: { color: '#FFFFFF', fontWeight: '600' },
-    sectionHeader: {
-        color: '#38BDF8',
-        fontSize: 12,
-        fontWeight: '600',
-        marginBottom: 8,
-    },
-    chatItem: {
+    newChatText: { color: '#FFFFFF', fontWeight: '700', fontSize: 13 },
+    historySection: { flex: 1 },
+    convItem: {
         flexDirection: 'row',
         alignItems: 'center',
-        padding: 10,
-        borderRadius: 8,
-        marginBottom: 4,
+        paddingVertical: 10,
+        paddingHorizontal: 8,
+        borderRadius: 6,
+        marginBottom: 2,
+        gap: 8,
     },
-    activeChatItem: { backgroundColor: '#1E293B' },
-    chatTitle: { color: '#CBD5E1', fontSize: 14 },
-    activeChatTitle: { color: '#38BDF8', fontWeight: '600' },
-    snippetText: { color: '#64748B', fontSize: 11, marginTop: 2 },
-    iconBtn: { padding: 6, marginLeft: 4 },
-    icon: { fontSize: 13 },
-    modalBackdrop: {
-        flex: 1,
-        backgroundColor: 'rgba(0,0,0,0.7)',
-        justifyContent: 'center',
+    convItemActive: { backgroundColor: '#1E293B' },
+    convIcon: { fontSize: 14 },
+    convTitle: { color: '#94A3B8', fontSize: 13, flex: 1 },
+    convTitleActive: { color: '#F8FAFC', fontWeight: '600' },
+    footer: {
+        borderTopWidth: 1,
+        borderTopColor: '#1E293B',
+        paddingTop: 12,
+        marginTop: 8,
+    },
+    searchSettingBtn: {
+        flexDirection: 'row',
         alignItems: 'center',
-    },
-    renameCard: {
-        width: '80%',
         backgroundColor: '#1E293B',
-        borderRadius: 12,
-        padding: 16,
+        padding: 10,
+        borderRadius: 8,
     },
-    renameHeader: {
-        color: '#F8FAFC',
-        fontSize: 16,
-        fontWeight: '600',
-        marginBottom: 12,
-    },
-    renameInput: {
-        backgroundColor: '#0F172A',
-        color: '#FFFFFF',
-        borderRadius: 6,
-        paddingHorizontal: 10,
-        paddingVertical: 8,
-        marginBottom: 16,
-    },
-    renameActions: {
-        flexDirection: 'row',
-        justifyContent: 'flex-end',
-        gap: 10,
-    },
-    cancelBtn: { padding: 8 },
-    saveBtn: {
-        backgroundColor: '#2563EB',
-        paddingHorizontal: 14,
-        paddingVertical: 8,
-        borderRadius: 6,
-    },
-    actionText: { color: '#94A3B8' },
-    saveText: { color: '#FFFFFF', fontWeight: '600' },
+    searchSettingTitle: { color: '#F8FAFC', fontSize: 12, fontWeight: '600' },
+    searchSettingSubtitle: { color: '#38BDF8', fontSize: 10, marginTop: 1 },
+    searchSettingAction: { color: '#94A3B8', fontSize: 11, fontWeight: '600' },
 });
