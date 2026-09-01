@@ -32,6 +32,7 @@ import {
 } from '../../database/repository';
 import { MindspaceIngestionService } from '../../services/MindspaceIngestionService';
 import { MindspaceRAGService } from '../../services/MindspaceRAGService';
+import { MindspaceSynthesisService } from '../../services/MindspaceSynthesisService';
 import { LLMService, PerformanceMetrics } from '../../services/LLMService';
 import { ModelRegistryModal } from '../../components/ModelRegistryModal';
 import { AssetViewerModal } from './AssetViewerModal';
@@ -52,6 +53,7 @@ export const NotebookDetailScreen: React.FC<Props> = ({
 
     const ingestionService = MindspaceIngestionService.getInstance();
     const ragService = MindspaceRAGService.getInstance();
+    const synthesisService = MindspaceSynthesisService.getInstance();
     const llm = LLMService.getInstance();
 
     const [notebook, setNotebook] = useState<NotebookRecord | null>(null);
@@ -59,9 +61,7 @@ export const NotebookDetailScreen: React.FC<Props> = ({
     const [messages, setMessages] = useState<NotebookMessageRecord[]>([]);
     const [conversationId, setConversationId] = useState<string>('');
 
-    // Dual-Tier RAG Toggle: null = Entire Notebook (Global), string = Single Asset
     const [targetAssetId, setTargetAssetId] = useState<string | null>(null);
-
     const [prompt, setPrompt] = useState('');
     const [streamingContent, setStreamingContent] = useState('');
     const [isGenerating, setIsGenerating] = useState(false);
@@ -69,16 +69,16 @@ export const NotebookDetailScreen: React.FC<Props> = ({
     const [ingestText, setIngestText] = useState<string | null>(null);
     const [metrics, setMetrics] = useState<PerformanceMetrics | null>(null);
 
-    // Model Selector Modal
+    // Modals
     const [isRegistryOpen, setRegistryOpen] = useState(false);
-
-    // Asset Inspection Modal
     const [selectedAsset, setSelectedAsset] = useState<NotebookAssetRecord | null>(null);
-
-    // Global Notebook Scratchpad Modal
     const [isScratchpadOpen, setScratchpadOpen] = useState(false);
     const [scratchpadText, setScratchpadText] = useState('');
     const [isSavingScratchpad, setIsSavingScratchpad] = useState(false);
+
+    // Deep Synthesis State
+    const [isSynthesizing, setIsSynthesizing] = useState(false);
+    const [synthesisStatus, setSynthesisStatus] = useState<string | null>(null);
 
     const activeModel = llm.getLoadedModel();
     let badgeLabel = 'No Model Loaded';
@@ -95,7 +95,6 @@ export const NotebookDetailScreen: React.FC<Props> = ({
         setAssets(asts);
         setScratchpadText(nb?.notebook_notes || '');
 
-        // Synchronize open asset modal
         setSelectedAsset((prev) => (prev ? asts.find((a) => a.id === prev.id) || null : null));
 
         const conv = await getOrCreateNotebookConversation(notebookId, targetAssetId);
@@ -109,7 +108,6 @@ export const NotebookDetailScreen: React.FC<Props> = ({
         loadNotebookData();
     }, [notebookId, targetAssetId]);
 
-    // Ingestion Handlers
     const handleAddPhoto = async () => {
         const res = await ImagePicker.launchCameraAsync({ quality: 0.9 });
         if (!res.canceled && res.assets[0]) {
@@ -180,6 +178,35 @@ export const NotebookDetailScreen: React.FC<Props> = ({
         }
     };
 
+    const handleRunDeepSynthesis = async () => {
+        if (assets.length === 0) {
+            Alert.alert('Assets Required', 'Add at least one screenshot or document to synthesize.');
+            return;
+        }
+
+        if (!llm.isReady()) {
+            Alert.alert('Model Required', 'Load a model to run synthesis.');
+            return;
+        }
+
+        setIsSynthesizing(true);
+        setSynthesisStatus('Starting research agent...');
+
+        try {
+            const report = await synthesisService.synthesizeNotebookToScratchpad(notebookId, {
+                onStatusUpdate: (status) => setSynthesisStatus(status),
+            });
+            setScratchpadText(report);
+            await loadNotebookData();
+            setScratchpadOpen(true);
+        } catch (err) {
+            Alert.alert('Synthesis Error', String(err));
+        } finally {
+            setIsSynthesizing(false);
+            setSynthesisStatus(null);
+        }
+    };
+
     const handleSaveScratchpad = async () => {
         setIsSavingScratchpad(true);
         try {
@@ -217,7 +244,6 @@ export const NotebookDetailScreen: React.FC<Props> = ({
         ]);
     };
 
-    // Chat Execution
     const handleSendMessage = async () => {
         const query = prompt.trim();
         if (!query) return;
@@ -255,7 +281,7 @@ export const NotebookDetailScreen: React.FC<Props> = ({
 
     return (
         <View style={[styles.container, { paddingTop: insets.top }]}>
-            {/* Header */}
+            {/* Top Header */}
             <View style={styles.header}>
                 <TouchableOpacity style={styles.backBtn} onPress={onBack}>
                     <Text style={styles.backBtnText}>‹ Notebooks</Text>
@@ -287,18 +313,35 @@ export const NotebookDetailScreen: React.FC<Props> = ({
                 </TouchableOpacity>
             </View>
 
-            {/* Asset Ingestion Action Bar */}
+            {/* Action & Ingestion Toolbar */}
             <View style={styles.ingestBar}>
                 <TouchableOpacity style={styles.ingestBtn} onPress={handleAddPhoto}>
-                    <Text style={styles.ingestBtnText}>📷 Camera Photo</Text>
+                    <Text style={styles.ingestBtnText}>📷 Photo</Text>
                 </TouchableOpacity>
                 <TouchableOpacity style={styles.ingestBtn} onPress={handlePickScreenshot}>
                     <Text style={styles.ingestBtnText}>🖼️ Screenshot</Text>
                 </TouchableOpacity>
                 <TouchableOpacity style={styles.ingestBtn} onPress={handleImportDoc}>
-                    <Text style={styles.ingestBtnText}>📄 Import Document</Text>
+                    <Text style={styles.ingestBtnText}>📄 Doc</Text>
+                </TouchableOpacity>
+                <TouchableOpacity
+                    style={[styles.synthesisBtn, isSynthesizing && styles.disabledBtn]}
+                    onPress={handleRunDeepSynthesis}
+                    disabled={isSynthesizing}
+                >
+                    <Text style={styles.synthesisBtnText}>⚡ Synthesize</Text>
                 </TouchableOpacity>
             </View>
+
+            {/* Deep Synthesis Progress Banner */}
+            {isSynthesizing && (
+                <View style={styles.synthesisBanner}>
+                    <ActivityIndicator color="#F59E0B" size="small" />
+                    <Text style={styles.synthesisBannerText}>
+                        {synthesisStatus || 'Synthesizing with live web research...'}
+                    </Text>
+                </View>
+            )}
 
             {/* Ingestion Spinner Banner */}
             {isIngesting && (
@@ -315,7 +358,7 @@ export const NotebookDetailScreen: React.FC<Props> = ({
                     showsHorizontalScrollIndicator={false}
                     contentContainerStyle={styles.shelfContent}
                 >
-                    {/* Global Notebook Selector Pill */}
+                    {/* Global Selector */}
                     <TouchableOpacity
                         style={[
                             styles.shelfCard,
@@ -330,7 +373,7 @@ export const NotebookDetailScreen: React.FC<Props> = ({
                         <Text style={styles.shelfSub}>All {assets.length} assets</Text>
                     </TouchableOpacity>
 
-                    {/* Asset Pills */}
+                    {/* Asset Items */}
                     {assets.map((item) => {
                         const isSelected = targetAssetId === item.id;
                         return (
@@ -367,12 +410,12 @@ export const NotebookDetailScreen: React.FC<Props> = ({
                 </ScrollView>
             </View>
 
-            {/* Active Scope Indicator */}
+            {/* Scope Indicator */}
             <View style={styles.scopeBanner}>
                 <Text style={styles.scopeText}>
                     {targetAssetId && activeTargetAsset
-                        ? `🎯 Querying Asset: "${activeTargetAsset.title}"`
-                        : `🌐 Cross-Asset Synthesis (Synthesizing ${assets.length} assets)`}
+                        ? `🎯 Scoped to: "${activeTargetAsset.title}"`
+                        : `🌐 Hybrid RAG (Balanced Across ${assets.length} Assets)`}
                 </Text>
             </View>
 
@@ -385,7 +428,7 @@ export const NotebookDetailScreen: React.FC<Props> = ({
                 </View>
             )}
 
-            {/* Scoped Chat Message Stream */}
+            {/* Message Feed */}
             <KeyboardAvoidingView
                 style={styles.flexFill}
                 behavior={Platform.OS === 'ios' ? 'padding' : 'height'}
@@ -500,14 +543,14 @@ export const NotebookDetailScreen: React.FC<Props> = ({
                 <View style={styles.modalOverlay}>
                     <View style={styles.scratchpadModal}>
                         <View style={styles.scratchpadHeader}>
-                            <Text style={styles.scratchpadTitle}>Notebook Scratchpad & Notes</Text>
+                            <Text style={styles.scratchpadTitle}>Notebook Scratchpad & Report</Text>
                             <TouchableOpacity onPress={() => setScratchpadOpen(false)}>
                                 <Text style={styles.scratchpadClose}>Close</Text>
                             </TouchableOpacity>
                         </View>
                         <TextInput
                             style={styles.scratchpadInput}
-                            placeholder="Write notebook-wide notes, conclusions, or comparison summaries..."
+                            placeholder="Write notes or tap '⚡ Synthesize' to auto-generate a comprehensive research report..."
                             placeholderTextColor="#64748B"
                             value={scratchpadText}
                             onChangeText={setScratchpadText}
@@ -519,7 +562,7 @@ export const NotebookDetailScreen: React.FC<Props> = ({
                             disabled={isSavingScratchpad}
                         >
                             <Text style={styles.saveScratchpadText}>
-                                {isSavingScratchpad ? 'Saving...' : 'Save Notebook Notes'}
+                                {isSavingScratchpad ? 'Saving...' : 'Save Scratchpad'}
                             </Text>
                         </TouchableOpacity>
                     </View>
@@ -568,7 +611,7 @@ const styles = StyleSheet.create({
         flexDirection: 'row',
         paddingHorizontal: 12,
         paddingVertical: 8,
-        gap: 8,
+        gap: 6,
         backgroundColor: '#1E293B50',
     },
     ingestBtn: {
@@ -581,6 +624,25 @@ const styles = StyleSheet.create({
         borderColor: '#334155',
     },
     ingestBtnText: { color: '#F8FAFC', fontSize: 11, fontWeight: '600' },
+    synthesisBtn: {
+        flex: 1.2,
+        backgroundColor: '#D97706',
+        paddingVertical: 8,
+        borderRadius: 6,
+        alignItems: 'center',
+    },
+    synthesisBtnText: { color: '#FFFFFF', fontSize: 11, fontWeight: '700' },
+    synthesisBanner: {
+        flexDirection: 'row',
+        alignItems: 'center',
+        backgroundColor: '#D9770625',
+        padding: 8,
+        marginHorizontal: 12,
+        marginTop: 6,
+        borderRadius: 6,
+        gap: 8,
+    },
+    synthesisBannerText: { color: '#F59E0B', fontSize: 11, fontWeight: '600', flex: 1 },
     ingestingBanner: {
         flexDirection: 'row',
         alignItems: 'center',
@@ -708,7 +770,7 @@ const styles = StyleSheet.create({
         borderRadius: 8,
         padding: 12,
         fontSize: 13,
-        minHeight: 180,
+        minHeight: 220,
         textAlignVertical: 'top',
         marginBottom: 14,
     },

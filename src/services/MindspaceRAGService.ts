@@ -5,6 +5,7 @@ import {
   getNotebookById,
   getNotebookMessages,
   insertNotebookMessage,
+  searchAssetChunksFTS,
   blobToVector,
   cosineSimilarity,
   NotebookAssetRecord,
@@ -15,8 +16,10 @@ import { EmbeddingService } from './EmbeddingService';
 import { ToolOrchestrator } from './ToolOrchestrator';
 
 export interface ScoredChunk {
+  chunkId: string;
   assetId: string;
   assetTitle: string;
+  assetType: string;
   chunkText: string;
   score: number;
 }
@@ -25,7 +28,7 @@ export interface RAGCallbacks {
   onToken: (token: string) => void;
   onMetrics?: (metrics: PerformanceMetrics) => void;
   onSourcesResolved?: (
-    sources: Array<{ asset_id: string; title: string; chunk_preview: string }>
+      sources: Array<{ asset_id: string; title: string; chunk_preview: string }>
   ) => void;
 }
 
@@ -45,24 +48,125 @@ export class MindspaceRAGService {
   }
 
   /**
+   * Hybrid RRF (Vector Cosine + FTS5 Keyword) with Modality-Balanced Allocation
+   */
+  private async retrieveHybridBalancedChunks(
+      notebookId: string,
+      userQuery: string,
+      allAssets: NotebookAssetRecord[]
+  ): Promise<ScoredChunk[]> {
+    const assetMap = new Map<string, NotebookAssetRecord>();
+    allAssets.forEach((a) => assetMap.set(a.id, a));
+
+    const allChunks = await getAssetChunksByNotebook(notebookId);
+    if (allChunks.length === 0) return [];
+
+    const RRF_K = 60;
+    const rrfScores = new Map<string, { chunk: typeof allChunks[0]; score: number }>();
+
+    // 1. Dense Semantic Vector Retrieval Rank
+    if (this.embeddingService.isReady()) {
+      try {
+        const queryVec = await this.embeddingService.getEmbedding(userQuery);
+        const vectorScored = allChunks
+            .map((chunk) => {
+              const vec = blobToVector(chunk.embedding);
+              const sim = vec.length > 0 ? cosineSimilarity(queryVec, vec) : 0;
+              return { chunk, sim };
+            })
+            .sort((a, b) => b.sim - a.sim);
+
+        vectorScored.forEach((item, rank) => {
+          const current = rrfScores.get(item.chunk.id) || { chunk: item.chunk, score: 0 };
+          current.score += 1 / (RRF_K + (rank + 1));
+          rrfScores.set(item.chunk.id, current);
+        });
+      } catch (err) {
+        console.warn('[MindspaceRAG] Vector scoring fallback:', err);
+      }
+    }
+
+    // 2. Sparse Keyword BM25 / FTS5 Retrieval Rank
+    const ftsHits = await searchAssetChunksFTS(notebookId, userQuery, 25);
+    ftsHits.forEach((hit, rank) => {
+      const matchChunk = allChunks.find((c) => c.id === hit.chunk_id);
+      if (matchChunk) {
+        const current = rrfScores.get(matchChunk.id) || { chunk: matchChunk, score: 0 };
+        current.score += 1 / (RRF_K + (rank + 1));
+        rrfScores.set(matchChunk.id, current);
+      }
+    });
+
+    // 3. Partition Candidates by Modality
+    const visualCandidates: ScoredChunk[] = [];
+    const documentCandidates: ScoredChunk[] = [];
+
+    rrfScores.forEach(({ chunk, score }) => {
+      const parent = assetMap.get(chunk.asset_id);
+      const isVisual = parent?.type === 'screenshot' || parent?.type === 'image';
+      const scored: ScoredChunk = {
+        chunkId: chunk.id,
+        assetId: chunk.asset_id,
+        assetTitle: parent?.title || 'Asset',
+        assetType: parent?.type || 'unknown',
+        chunkText: chunk.chunk_text,
+        score,
+      };
+
+      if (isVisual) {
+        visualCandidates.push(scored);
+      } else {
+        documentCandidates.push(scored);
+      }
+    });
+
+    visualCandidates.sort((a, b) => b.score - a.score);
+    documentCandidates.sort((a, b) => b.score - a.score);
+
+    // 4. Modality-Balanced Selection: Reserve guaranteed slots for images
+    // e.g., Target 6 total chunks: Max 3 Visual + Max 3 Document
+    const balancedResults: ScoredChunk[] = [];
+    const reservedVisual = visualCandidates.slice(0, 3);
+    const reservedDocs = documentCandidates.slice(0, 3);
+
+    balancedResults.push(...reservedVisual, ...reservedDocs);
+
+    // If one modality has fewer than 3, fill remaining capacity from the other
+    if (balancedResults.length < 6) {
+      const remainingSlots = 6 - balancedResults.length;
+      if (visualCandidates.length > 3 && reservedDocs.length < 3) {
+        balancedResults.push(...visualCandidates.slice(3, 3 + remainingSlots));
+      } else if (documentCandidates.length > 3 && reservedVisual.length < 3) {
+        balancedResults.push(...documentCandidates.slice(3, 3 + remainingSlots));
+      }
+    }
+
+    return balancedResults.sort((a, b) => b.score - a.score);
+  }
+
+  /**
    * Executes Dual-Scope RAG Query
    */
   public async executeQuery(
-    notebookId: string,
-    conversationId: string,
-    userQuery: string,
-    targetAssetId: string | null,
-    callbacks: RAGCallbacks
+      notebookId: string,
+      conversationId: string,
+      userQuery: string,
+      targetAssetId: string | null,
+      callbacks: RAGCallbacks
   ): Promise<{ fullText: string; messageRecord: NotebookMessageRecord }> {
-    // 1. Save User Message
-    await insertNotebookMessage(conversationId, 'user', userQuery, [], Math.ceil(userQuery.length / 4));
+    await insertNotebookMessage(
+        conversationId,
+        'user',
+        userQuery,
+        [],
+        Math.ceil(userQuery.length / 4)
+    );
 
-    // 2. Fetch Conversation History (last 3 turns)
     const history = await getNotebookMessages(conversationId);
     const recentTurns = history.slice(-6);
 
     let promptPayload = '';
-    let sources: Array<{ asset_id: string; title: string; chunk_preview: string }> = [];
+    const sources: Array<{ asset_id: string; title: string; chunk_preview: string }> = [];
 
     // ==========================================
     // Scope A: Single-Asset Inspection Mode
@@ -71,13 +175,11 @@ export class MindspaceRAGService {
       const asset = await getAssetById(targetAssetId);
       if (!asset) throw new Error('Target asset not found.');
 
-      sources = [
-        {
-          asset_id: asset.id,
-          title: asset.title,
-          chunk_preview: asset.structured_card || asset.extracted_text?.substring(0, 100) || '',
-        },
-      ];
+      sources.push({
+        asset_id: asset.id,
+        title: asset.title,
+        chunk_preview: asset.structured_card || asset.extracted_text?.substring(0, 100) || '',
+      });
       callbacks.onSourcesResolved?.(sources);
 
       let assetContext = `### INSPECTED ASSET: "${asset.title}" (${asset.type.toUpperCase()})\n`;
@@ -88,12 +190,12 @@ export class MindspaceRAGService {
         assetContext += `### USER ATTACHED NOTES:\n${asset.user_note}\n\n`;
       }
       if (asset.extracted_text) {
-        assetContext += `### HIGH-PRECISION OCR / TEXT CONTENT:\n${asset.extracted_text.substring(0, 2000)}\n\n`;
+        assetContext += `### HIGH-PRECISION OCR / TEXT:\n${asset.extracted_text.substring(0, 2000)}\n\n`;
       }
 
       const baseSystem =
-        `You are MindSpace, an intelligent on-device research assistant analyzing a single asset.\n` +
-        `Answer the user's questions accurately using the provided asset context.`;
+          `You are MindSpace, an intelligent on-device research assistant analyzing a single asset.\n` +
+          `Answer the user's questions accurately using the provided asset context.`;
 
       const formattedSystem = this.orchestrator.formatSystemPromptWithTools(baseSystem, userQuery);
 
@@ -103,56 +205,28 @@ export class MindspaceRAGService {
       }
 
       promptPayload =
-        `<|im_start|>system\n${formattedSystem}\n\n${assetContext}<|im_end|>\n` +
-        historyString +
-        `<|im_start|>assistant\n`;
+          `<|im_start|>system\n${formattedSystem}\n\n${assetContext}<|im_end|>\n` +
+          historyString +
+          `<|im_start|>assistant\n`;
     }
 
-    // ==========================================
-    // Scope B: Global Notebook RAG Mode
+        // ==========================================
+        // Scope B: Global Notebook Hybrid RAG Mode
     // ==========================================
     else {
       const notebook = await getNotebookById(notebookId);
       const allAssets = await getAssetsByNotebook(notebookId);
-      const allChunks = await getAssetChunksByNotebook(notebookId);
 
-      const assetMap = new Map<string, NotebookAssetRecord>();
-      allAssets.forEach((a) => assetMap.set(a.id, a));
+      const topChunks = await this.retrieveHybridBalancedChunks(notebookId, userQuery, allAssets);
 
-      const scoredChunks: ScoredChunk[] = [];
-
-      // 1. Semantic Cosine Vector Search
-      if (this.embeddingService.isReady() && allChunks.length > 0) {
-        try {
-          const queryVec = await this.embeddingService.getEmbedding(userQuery);
-          for (const chunk of allChunks) {
-            const chunkVec = blobToVector(chunk.embedding);
-            if (chunkVec.length > 0) {
-              const score = cosineSimilarity(queryVec, chunkVec);
-              scoredChunks.push({
-                assetId: chunk.asset_id,
-                assetTitle: assetMap.get(chunk.asset_id)?.title || 'Asset',
-                chunkText: chunk.chunk_text,
-                score,
-              });
-            }
-          }
-        } catch (vecErr) {
-          console.warn('[MindspaceRAG] Vector similarity skipped:', vecErr);
-        }
-      }
-
-      // 2. Sort and select Top-K Chunks
-      scoredChunks.sort((a, b) => b.score - a.score);
-      const topChunks = scoredChunks.slice(0, 5);
-
-      // 3. Fallback: If no chunks match, ground on asset summaries
       let groundingContext = '### NOTEBOOK GROUNDING SOURCES:\n';
 
       if (topChunks.length > 0) {
         const uniqueAssetIds = new Set<string>();
         topChunks.forEach((c) => {
-          groundingContext += `[Source: "${c.assetTitle}" | Asset ID: ${c.assetId}]\n${c.chunkText}\n\n`;
+          const typeLabel = c.assetType === 'screenshot' || c.assetType === 'image' ? 'Visual Card' : 'Doc Text';
+          groundingContext += `[Source: "${c.assetTitle}" (${typeLabel}) | Asset ID: ${c.assetId}]\n${c.chunkText}\n\n`;
+
           if (!uniqueAssetIds.has(c.assetId)) {
             uniqueAssetIds.add(c.assetId);
             sources.push({
@@ -163,6 +237,7 @@ export class MindspaceRAGService {
           }
         });
       } else {
+        // Fallback to top-level knowledge cards
         allAssets.slice(0, 6).forEach((a) => {
           groundingContext += `[Source: "${a.title}"]\n${a.structured_card || a.extracted_text?.substring(0, 200) || 'Empty'}\n\n`;
           sources.push({
@@ -180,8 +255,8 @@ export class MindspaceRAGService {
       callbacks.onSourcesResolved?.(sources);
 
       const baseSystem =
-        `You are MindSpace, an on-device multimodal research assistant synthesizing information across all assets in notebook: "${notebook?.title || 'Research'}".\n` +
-        `Compare specs, aggregate facts, and answer user queries using the notebook grounding sources above.`;
+          `You are MindSpace, an on-device multimodal research assistant synthesizing information across all assets in notebook: "${notebook?.title || 'Research'}".\n` +
+          `Compare specs, aggregate facts, and answer user queries accurately using the grounding sources above.`;
 
       const formattedSystem = this.orchestrator.formatSystemPromptWithTools(baseSystem, userQuery);
 
@@ -191,28 +266,26 @@ export class MindspaceRAGService {
       }
 
       promptPayload =
-        `<|im_start|>system\n${formattedSystem}\n\n${groundingContext}<|im_end|>\n` +
-        historyString +
-        `<|im_start|>assistant\n`;
+          `<|im_start|>system\n${formattedSystem}\n\n${groundingContext}<|im_end|>\n` +
+          historyString +
+          `<|im_start|>assistant\n`;
     }
 
-    // 3. Stream Response via ToolOrchestrator
     const result = await this.orchestrator.executeAgentLoop(
-      promptPayload,
-      userQuery,
-      {
-        onToken: callbacks.onToken,
-        onMetrics: callbacks.onMetrics,
-      }
+        promptPayload,
+        userQuery,
+        {
+          onToken: callbacks.onToken,
+          onMetrics: callbacks.onMetrics,
+        }
     );
 
-    // 4. Save Assistant Response with Referenced Sources
     const assistantMsg = await insertNotebookMessage(
-      conversationId,
-      'assistant',
-      result.fullText,
-      sources,
-      result.metrics.totalTokens
+        conversationId,
+        'assistant',
+        result.fullText,
+        sources,
+        result.metrics.totalTokens
     );
 
     return {

@@ -605,31 +605,6 @@ export async function updateAssetStructuredCard(
   ]);
 }
 
-export async function deleteNotebookAsset(assetId: string): Promise<void> {
-  const db = await getDatabase();
-  await db.runAsync('DELETE FROM notebook_assets WHERE id = ?;', [assetId]);
-}
-
-// Asset Chunks & Embeddings
-export async function insertAssetChunk(
-  notebookId: string,
-  assetId: string,
-  chunkIndex: number,
-  chunkText: string,
-  embedding: Float32Array,
-  tokensCount: number
-): Promise<void> {
-  const db = await getDatabase();
-  const id = `chk_${Date.now()}_${generateUUID().substring(0, 8)}`;
-  const blob = vectorToBlob(embedding);
-
-  await db.runAsync(
-    `INSERT INTO asset_chunks (id, notebook_id, asset_id, chunk_index, chunk_text, embedding, tokens_count, created_at)
-     VALUES (?, ?, ?, ?, ?, ?, ?, ?);`,
-    [id, notebookId, assetId, chunkIndex, chunkText, blob, tokensCount, Date.now()]
-  );
-}
-
 export async function getAssetChunksByNotebook(notebookId: string): Promise<AssetChunkRecord[]> {
   const db = await getDatabase();
   return db.getAllAsync<AssetChunkRecord>(
@@ -739,4 +714,75 @@ export async function insertNotebookMessage(
     tokens_count: tokensCount,
     created_at: now,
   };
+}
+
+
+export async function insertAssetChunk(
+    notebookId: string,
+    assetId: string,
+    chunkIndex: number,
+    chunkText: string,
+    embedding: Float32Array,
+    tokensCount: number
+): Promise<void> {
+  const db = await getDatabase();
+  const id = `chk_${Date.now()}_${generateUUID().substring(0, 8)}`;
+  const blob = vectorToBlob(embedding);
+
+  await db.withTransactionAsync(async () => {
+    // 1. Vector table
+    await db.runAsync(
+        `INSERT INTO asset_chunks (id, notebook_id, asset_id, chunk_index, chunk_text, embedding, tokens_count, created_at)
+       VALUES (?, ?, ?, ?, ?, ?, ?, ?);`,
+        [id, notebookId, assetId, chunkIndex, chunkText, blob, tokensCount, Date.now()]
+    );
+
+    // 2. Full-Text Search index
+    await db.runAsync(
+        `INSERT INTO asset_chunks_fts (chunk_id, notebook_id, asset_id, chunk_text)
+       VALUES (?, ?, ?, ?);`,
+        [id, notebookId, assetId, chunkText]
+    );
+  });
+}
+
+export async function searchAssetChunksFTS(
+    notebookId: string,
+    query: string,
+    limit: number = 20
+): Promise<Array<{ chunk_id: string; asset_id: string; chunk_text: string; rank: number }>> {
+  const db = await getDatabase();
+  const sanitized = query.replace(/[^\w\s]/gi, '').trim();
+  if (!sanitized) return [];
+
+  // Match words with prefix wildcards
+  const ftsQuery = sanitized
+      .split(/\s+/)
+      .filter((w) => w.length > 1)
+      .map((w) => `${w}*`)
+      .join(' OR ');
+
+  if (!ftsQuery) return [];
+
+  try {
+    return await db.getAllAsync(
+        `SELECT chunk_id, asset_id, chunk_text, rank
+       FROM asset_chunks_fts
+       WHERE notebook_id = ? AND asset_chunks_fts MATCH ?
+       ORDER BY rank
+       LIMIT ?;`,
+        [notebookId, ftsQuery, limit]
+    );
+  } catch (err) {
+    console.warn('[Repository] FTS search skipped:', err);
+    return [];
+  }
+}
+
+export async function deleteNotebookAsset(assetId: string): Promise<void> {
+  const db = await getDatabase();
+  await db.withTransactionAsync(async () => {
+    await db.runAsync('DELETE FROM asset_chunks_fts WHERE asset_id = ?;', [assetId]);
+    await db.runAsync('DELETE FROM notebook_assets WHERE id = ?;', [assetId]);
+  });
 }

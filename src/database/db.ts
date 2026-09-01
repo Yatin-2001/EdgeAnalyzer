@@ -134,6 +134,13 @@ export async function getDatabase(): Promise<SQLite.SQLiteDatabase> {
       created_at INTEGER NOT NULL,
       FOREIGN KEY (conversation_id) REFERENCES notebook_conversations(id) ON DELETE CASCADE
     );
+
+    CREATE VIRTUAL TABLE IF NOT EXISTS asset_chunks_fts USING fts5(
+    chunk_id UNINDEXED,
+    notebook_id UNINDEXED,
+    asset_id UNINDEXED,
+    chunk_text
+  );
   `);
 
   return dbInstance;
