@@ -136,11 +136,49 @@ export async function getDatabase(): Promise<SQLite.SQLiteDatabase> {
     );
 
     CREATE VIRTUAL TABLE IF NOT EXISTS asset_chunks_fts USING fts5(
-    chunk_id UNINDEXED,
-    notebook_id UNINDEXED,
-    asset_id UNINDEXED,
-    chunk_text
-  );
+        chunk_id UNINDEXED,
+        notebook_id UNINDEXED,
+        asset_id UNINDEXED,
+        chunk_text
+      );
+
+    CREATE TABLE IF NOT EXISTS contacts (
+        id TEXT PRIMARY KEY,
+        name TEXT NOT NULL,
+        platform_handle TEXT,
+        default_platform TEXT NOT NULL,
+        relationship_type TEXT NOT NULL,
+        communication_style TEXT,
+        profile_summary TEXT,
+        avatar_color TEXT DEFAULT '#8B5CF6',
+        created_at INTEGER NOT NULL,
+        updated_at INTEGER NOT NULL
+    );
+
+    CREATE TABLE IF NOT EXISTS contact_interactions (
+        id TEXT PRIMARY KEY,
+        contact_id TEXT,
+        source_type TEXT NOT NULL,
+        screenshot_uri TEXT,
+        raw_transcript TEXT NOT NULL,
+        situation_summary TEXT,
+        detected_sentiment TEXT,
+        user_intent TEXT,
+        selected_reply TEXT,
+        custom_reply_feedback TEXT,
+        created_at INTEGER NOT NULL,
+        FOREIGN KEY (contact_id) REFERENCES contacts(id) ON DELETE CASCADE
+    );
+
+    CREATE TABLE IF NOT EXISTS contact_facts (
+        id TEXT PRIMARY KEY,
+        contact_id TEXT NOT NULL,
+        fact_text TEXT NOT NULL,
+        embedding BLOB NOT NULL,
+        created_at INTEGER NOT NULL,
+        FOREIGN KEY (contact_id) REFERENCES contacts(id) ON DELETE CASCADE
+    );
+           
   `);
 
   return dbInstance;

@@ -17,9 +17,9 @@ interface Props {
     visible: boolean;
     conversations: ConversationRecord[];
     activeId: string | null;
-    activeTab: 'chat' | 'studio' | 'mindspace';
+    activeTab: 'chat' | 'studio' | 'mindspace' | 'advisor';
     searchProvider: SearchProvider;
-    onSelectTab: (tab: 'chat' | 'studio' | 'mindspace') => void;
+    onSelectTab: (tab: 'chat' | 'studio' | 'mindspace' | 'advisor') => void;
     onSelect: (conv: ConversationRecord) => void;
     onNew: () => void;
     onDelete: (id: string) => void;
@@ -160,6 +160,28 @@ export const ConversationDrawer: React.FC<Props> = ({
                                 MindSpace Notebooks
                             </Text>
                         </TouchableOpacity>
+
+                        <TouchableOpacity
+                            style={[
+                                styles.workspaceItem,
+                                activeTab === 'advisor' && styles.workspaceItemActive,
+                            ]}
+                            onPress={() => {
+                                onSelectTab('advisor');
+                                onClose();
+                            }}
+                        >
+                            <Text style={styles.workspaceIcon}>🤝</Text>
+                            <Text
+                                style={[
+                                    styles.workspaceText,
+                                    activeTab === 'advisor' && styles.workspaceTextActive,
+                                ]}
+                            >
+                                Message Advisor
+                            </Text>
+                        </TouchableOpacity>
+
                     </View>
 
                     {/* New Chat Button */}

@@ -54,6 +54,62 @@ export interface UserFactRecord {
   created_at: number;
 }
 
+// ----------------------------------------------------
+// Relationship Profiler & Advisor Interfaces
+// ----------------------------------------------------
+export type RelationshipType =
+    | 'Friend'
+    | 'Colleague'
+    | 'Manager'
+    | 'Dating'
+    | 'Family'
+    | 'Client'
+    | 'Other';
+
+export type CommunicationPlatform =
+    | 'whatsapp'
+    | 'instagram'
+    | 'slack'
+    | 'email'
+    | 'imessage'
+    | 'linkedin'
+    | 'other';
+
+export interface ContactRecord {
+    id: string;
+    name: string;
+    platform_handle: string | null;
+    default_platform: CommunicationPlatform;
+    relationship_type: RelationshipType;
+    communication_style: string | null;
+    profile_summary: string | null;
+    avatar_color: string;
+    created_at: number;
+    updated_at: number;
+}
+
+export interface ContactInteractionRecord {
+    id: string;
+    contact_id: string | null; // NULL indicates anonymous/ephemeral session
+    source_type: 'screenshot' | 'manual_text';
+    screenshot_uri: string | null;
+    raw_transcript: string;
+    situation_summary: string | null;
+    detected_sentiment: string | null;
+    user_intent: string | null;
+    selected_reply: string | null;
+    custom_reply_feedback: string | null;
+    created_at: number;
+}
+
+export interface ContactFactRecord {
+    id: string;
+    contact_id: string;
+    fact_text: string;
+    embedding: Uint8Array;
+    created_at: number;
+}
+
 // MindSpace Multimodal Notebook Models
 export interface NotebookRecord {
   id: string;
@@ -785,4 +841,212 @@ export async function deleteNotebookAsset(assetId: string): Promise<void> {
     await db.runAsync('DELETE FROM asset_chunks_fts WHERE asset_id = ?;', [assetId]);
     await db.runAsync('DELETE FROM notebook_assets WHERE id = ?;', [assetId]);
   });
+}
+
+
+// ----------------------------------------------------
+// Contacts CRUD Operations
+// ----------------------------------------------------
+export async function getAllContacts(): Promise<
+    Array<ContactRecord & { interaction_count: number }>
+> {
+    const db = await getDatabase();
+    return db.getAllAsync<ContactRecord & { interaction_count: number }>(`
+    SELECT c.*, COUNT(i.id) as interaction_count
+    FROM contacts c
+    LEFT JOIN contact_interactions i ON c.id = i.contact_id
+    GROUP BY c.id
+    ORDER BY c.updated_at DESC;
+  `);
+}
+
+export async function getContactById(id: string): Promise<ContactRecord | null> {
+    const db = await getDatabase();
+    return db.getFirstAsync<ContactRecord>('SELECT * FROM contacts WHERE id = ?;', [id]);
+}
+
+export async function findContactByName(name: string): Promise<ContactRecord | null> {
+    const db = await getDatabase();
+    const clean = name.trim().toLowerCase();
+    return db.getFirstAsync<ContactRecord>(
+        'SELECT * FROM contacts WHERE LOWER(name) LIKE ? LIMIT 1;',
+        [`%${clean}%`]
+    );
+}
+
+export async function createContact(
+    name: string,
+    relationshipType: RelationshipType = 'Friend',
+    platform: CommunicationPlatform = 'whatsapp',
+    platformHandle: string | null = null,
+    communicationStyle: string | null = null,
+    avatarColor: string = '#8B5CF6'
+): Promise<ContactRecord> {
+    const db = await getDatabase();
+    const id = `contact_${Date.now()}_${generateUUID().substring(0, 8)}`;
+    const now = Date.now();
+
+    await db.runAsync(
+        `INSERT INTO contacts (
+      id, name, platform_handle, default_platform, relationship_type,
+      communication_style, profile_summary, avatar_color, created_at, updated_at
+    ) VALUES (?, ?, ?, ?, ?, ?, '', ?, ?, ?);`,
+        [
+            id,
+            name.trim(),
+            platformHandle?.trim() || null,
+            platform,
+            relationshipType,
+            communicationStyle?.trim() || null,
+            avatarColor,
+            now,
+            now,
+        ]
+    );
+
+    return {
+        id,
+        name: name.trim(),
+        platform_handle: platformHandle?.trim() || null,
+        default_platform: platform,
+        relationship_type: relationshipType,
+        communication_style: communicationStyle?.trim() || null,
+        profile_summary: '',
+        avatar_color: avatarColor,
+        created_at: now,
+        updated_at: now,
+    };
+}
+
+export async function updateContact(
+    id: string,
+    name: string,
+    relationshipType: RelationshipType,
+    platform: CommunicationPlatform,
+    communicationStyle: string | null,
+    profileSummary: string | null
+): Promise<void> {
+    const db = await getDatabase();
+    await db.runAsync(
+        `UPDATE contacts 
+     SET name = ?, relationship_type = ?, default_platform = ?, 
+         communication_style = ?, profile_summary = ?, updated_at = ?
+     WHERE id = ?;`,
+        [name, relationshipType, platform, communicationStyle, profileSummary, Date.now(), id]
+    );
+}
+
+export async function deleteContact(id: string): Promise<void> {
+    const db = await getDatabase();
+    await db.runAsync('DELETE FROM contacts WHERE id = ?;', [id]);
+}
+
+// ----------------------------------------------------
+// Contact Interactions & Learning Feedback
+// ----------------------------------------------------
+export async function insertContactInteraction(
+    contactId: string | null,
+    sourceType: 'screenshot' | 'manual_text',
+    rawTranscript: string,
+    situationSummary: string | null,
+    detectedSentiment: string | null,
+    userIntent: string | null,
+    screenshotUri: string | null = null
+): Promise<ContactInteractionRecord> {
+    const db = await getDatabase();
+    const id = `inter_${Date.now()}_${generateUUID().substring(0, 8)}`;
+    const now = Date.now();
+
+    await db.withTransactionAsync(async () => {
+        await db.runAsync(
+            `INSERT INTO contact_interactions (
+        id, contact_id, source_type, screenshot_uri, raw_transcript,
+        situation_summary, detected_sentiment, user_intent, selected_reply, custom_reply_feedback, created_at
+      ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, NULL, NULL, ?);`,
+            [
+                id,
+                contactId,
+                sourceType,
+                screenshotUri,
+                rawTranscript,
+                situationSummary,
+                detectedSentiment,
+                userIntent,
+                now,
+            ]
+        );
+
+        if (contactId) {
+            await db.runAsync('UPDATE contacts SET updated_at = ? WHERE id = ?;', [now, contactId]);
+        }
+    });
+
+    return {
+        id,
+        contact_id: contactId,
+        source_type: sourceType,
+        screenshot_uri: screenshotUri,
+        raw_transcript: rawTranscript,
+        situation_summary: situationSummary,
+        detected_sentiment: detectedSentiment,
+        user_intent: userIntent,
+        selected_reply: null,
+        custom_reply_feedback: null,
+        created_at: now,
+    };
+}
+
+export async function updateInteractionSelectedReply(
+    interactionId: string,
+    selectedReply: string | null,
+    customFeedback: string | null = null
+): Promise<void> {
+    const db = await getDatabase();
+    await db.runAsync(
+        `UPDATE contact_interactions 
+     SET selected_reply = ?, custom_reply_feedback = ? 
+     WHERE id = ?;`,
+        [selectedReply, customFeedback, interactionId]
+    );
+}
+
+export async function getInteractionsByContact(
+    contactId: string,
+    limit: number = 10
+): Promise<ContactInteractionRecord[]> {
+    const db = await getDatabase();
+    return db.getAllAsync<ContactInteractionRecord>(
+        `SELECT * FROM contact_interactions 
+     WHERE contact_id = ? 
+     ORDER BY created_at DESC 
+     LIMIT ?;`,
+        [contactId, limit]
+    );
+}
+
+// ----------------------------------------------------
+// Contact Facts (Semantic Memory)
+// ----------------------------------------------------
+export async function insertContactFact(
+    contactId: string,
+    factText: string,
+    vector: Float32Array
+): Promise<void> {
+    const db = await getDatabase();
+    const id = `cfact_${Date.now()}_${generateUUID().substring(0, 8)}`;
+    const blob = vectorToBlob(vector);
+
+    await db.runAsync(
+        `INSERT INTO contact_facts (id, contact_id, fact_text, embedding, created_at)
+     VALUES (?, ?, ?, ?, ?);`,
+        [id, contactId, factText.trim(), blob, Date.now()]
+    );
+}
+
+export async function getContactFacts(contactId: string): Promise<ContactFactRecord[]> {
+    const db = await getDatabase();
+    return db.getAllAsync<ContactFactRecord>(
+        'SELECT * FROM contact_facts WHERE contact_id = ? ORDER BY created_at DESC;',
+        [contactId]
+    );
 }

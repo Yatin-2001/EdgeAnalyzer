@@ -44,8 +44,14 @@ import { StudioScreen } from '../src/screens/StudioScreen';
 import { MindspaceHomeScreen } from '../src/screens/mindspace/MindspaceHomeScreen';
 import { NotebookDetailScreen } from '../src/screens/mindspace/NotebookDetailScreen';
 
+import {AdvisorWorkspaceScreen} from "@/src/screens/advisor/AdvisorWorkspaceScreen";
+import {ContactDetailScreen} from "@/src/screens/advisor/ContactDetailScreen";
+import {RelationshipHubScreen} from "@/src/screens/advisor/RelationshipHubScreen";
+
+
+
 export default function ChatScreen() {
-  const [activeTab, setActiveTab] = useState<'chat' | 'studio' | 'mindspace'>('chat');
+  const [activeTab, setActiveTab] = useState<'chat' | 'studio' | 'mindspace' | 'advisor'>('chat');
   const [conversations, setConversations] = useState<ConversationRecord[]>([]);
   const [activeConv, setActiveConv] = useState<ConversationRecord | null>(null);
   const [messages, setMessages] = useState<MessageRecord[]>([]);
@@ -62,6 +68,9 @@ export default function ChatScreen() {
   const [searchProvider, setSearchProvider] = useState<SearchProvider>('tavily_keyless');
 
   const [activeNotebookId, setActiveNotebookId] = useState<string | null>(null);
+
+  const [selectedAdvisorContactId, setSelectedAdvisorContactId] = useState<string | null>(null);
+  const [isAdvisorWorkspaceOpen, setIsAdvisorWorkspaceOpen] = useState(false);
 
   const insets = useSafeAreaInsets();
   const llm = useRef(LLMService.getInstance()).current;
@@ -311,6 +320,42 @@ export default function ChatScreen() {
     return (
         <MindspaceHomeScreen
             onSelectNotebook={(id) => setActiveNotebookId(id)}
+            onBackToChat={() => setActiveTab('chat')}
+        />
+    );
+  }
+
+  // 2. Add advisor routing block before main return:
+  if (activeTab === 'advisor') {
+    if (isAdvisorWorkspaceOpen) {
+      return (
+          <AdvisorWorkspaceScreen
+              initialContactId={selectedAdvisorContactId}
+              onBack={() => setIsAdvisorWorkspaceOpen(false)}
+          />
+      );
+    }
+
+    if (selectedAdvisorContactId && selectedAdvisorContactId !== 'anonymous') {
+      return (
+          <ContactDetailScreen
+              contactId={selectedAdvisorContactId}
+              onBack={() => setSelectedAdvisorContactId(null)}
+              onOpenAdvisor={(id) => {
+                setSelectedAdvisorContactId(id);
+                setIsAdvisorWorkspaceOpen(true);
+              }}
+          />
+      );
+    }
+
+    return (
+        <RelationshipHubScreen
+            onSelectContact={(id) => setSelectedAdvisorContactId(id)}
+            onOpenAnonymousAdvisor={() => {
+              setSelectedAdvisorContactId('anonymous');
+              setIsAdvisorWorkspaceOpen(true);
+            }}
             onBackToChat={() => setActiveTab('chat')}
         />
     );
