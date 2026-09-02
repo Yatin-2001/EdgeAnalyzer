@@ -69,7 +69,7 @@ export class ModelManager {
     await ModelFile.copyContentUriToFile(sourceUri, destination.uri);
 
     const workingFile = new File(destination.uri);
-    if (!workingFile.exists || workingFile.size <= 0) {
+    if (!workingFile.exists) {
       throw new Error(`Failed to copy "${filename}" to permanent storage.`);
     }
 
@@ -81,7 +81,7 @@ export class ModelManager {
 
     return {
       permanentUri: workingFile.uri,
-      sizeBytes: workingFile.size,
+      sizeBytes: workingFile.size || 0,
     };
   }
 
@@ -93,20 +93,24 @@ export class ModelManager {
 
     // 1. Permanent Local File Handling (Post-restart safe)
     if (uri.startsWith('file://')) {
-      const localFile = new File(uri);
-      if (localFile.exists && localFile.size > 0) {
+      const filename = uri.split('/').pop() || record.original_name;
+      const fileInModels = new File(this.modelsDirectory, filename);
+      const localFile = fileInModels.exists ? fileInModels : new File(uri);
+
+      if (localFile.exists) {
         const info: ModelInfo = {
           originalName: record.original_name,
           workingFileName: record.original_name,
           originalUri: uri,
           workingUri: localFile.uri,
-          sizeBytes: localFile.size,
+          sizeBytes: record.size_bytes || localFile.size || 0,
           status: 'READY_TO_LOAD',
           slotType,
         };
         this.setActiveSlot(slotType, info);
         return info;
       }
+      throw new Error(`Model file not found at permanent path: ${uri}`);
     }
 
     // 2. Fallback for content:// URIs
@@ -140,7 +144,7 @@ export class ModelManager {
         activeSlot.status === 'READY_TO_LOAD'
     ) {
       const workingFile = new File(activeSlot.workingUri);
-      if (workingFile.exists && workingFile.size > 0) {
+      if (workingFile.exists) {
         return activeSlot;
       }
     }
@@ -149,24 +153,29 @@ export class ModelManager {
       await this.deleteWorkingCopy(slotType);
     }
 
-    // If already a permanent internal file, bypass SAF metadata calls
+    // Direct file:// path handling (strictly bypasses SAF contentResolver)
     if (originalUri.startsWith('file://')) {
-      const localFile = new File(originalUri);
-      if (localFile.exists && localFile.size > 0) {
+      const filename = originalUri.split('/').pop() || fallbackName || 'model.gguf';
+      const fileInModels = new File(this.modelsDirectory, filename);
+      const localFile = fileInModels.exists ? fileInModels : new File(originalUri);
+
+      if (localFile.exists) {
         const info: ModelInfo = {
-          originalName: fallbackName || 'model.gguf',
-          workingFileName: fallbackName || 'model.gguf',
-          originalUri,
+          originalName: fallbackName || filename,
+          workingFileName: filename,
+          originalUri: localFile.uri,
           workingUri: localFile.uri,
-          sizeBytes: localFile.size,
+          sizeBytes: localFile.size || 0,
           status: 'READY_TO_LOAD',
           slotType,
         };
         this.setActiveSlot(slotType, info);
         return info;
       }
+      throw new Error(`Local model file not found at: ${originalUri}`);
     }
 
+    // content:// SAF path handling
     let metadata: ModelFileMetadata;
     try {
       metadata = await ModelFile.getContentUriMetadata(originalUri);
@@ -189,7 +198,7 @@ export class ModelManager {
       workingFileName,
       originalUri,
       workingUri: null,
-      sizeBytes: metadata.sizeBytes,
+      sizeBytes: metadata.sizeBytes || null,
       status: 'MODEL_AVAILABLE',
       slotType,
     };
@@ -212,7 +221,7 @@ export class ModelManager {
       await ModelFile.copyContentUriToFile(modelInfo.originalUri, destination.uri);
 
       const workingFile = new File(destination.uri);
-      if (!workingFile.exists || workingFile.size <= 0) {
+      if (!workingFile.exists) {
         throw new Error(`Working model binary copy failed for ${modelInfo.slotType}.`);
       }
 
@@ -223,7 +232,7 @@ export class ModelManager {
       }
 
       modelInfo.workingUri = workingFile.uri;
-      modelInfo.sizeBytes = workingFile.size;
+      modelInfo.sizeBytes = workingFile.size || 0;
       modelInfo.status = 'READY_TO_LOAD';
 
       return modelInfo;

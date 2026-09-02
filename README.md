@@ -1,669 +1,527 @@
 # EdgeAnalyzer 📱⚡
 
-**EdgeAnalyzer** is an open-source, on-device multimodal AI assistant
-for Android. Built with React Native, Expo, and `llama.cpp` bindings, it
-enables local inference for large language models (LLMs),
-vision-language models (VLMs), and embeddings directly on supported
-mobile hardware.
+**EdgeAnalyzer** is an open-source, on-device multimodal AI assistant and personal intelligence engine for Android. Built with React Native, Expo SDK 54, and native `llama.cpp` bindings (`llama.rn`), it executes local inference for large language models (LLMs), vision-language models (VLMs), and embeddings directly on mobile GPUs without relying on cloud servers.
 
-The MVP is designed around four principles:
+MVP 2.0 expands EdgeAnalyzer into an integrated on-device knowledge and communication suite with four core workspaces:
 
--   **Local-first inference** --- model inference runs on-device.
--   **Memory-aware execution** --- model loading and vision
-    preprocessing are optimized for mobile GPU/RAM constraints.
--   **Agentic tools** --- the local model can iteratively invoke device
-    and network tools.
--   **Persistent local state** --- conversations, models, facts, and
-    search indexes remain on-device.
+* **💬 Conversational Chat**: Local multi-session chat with cross-session semantic memory and autonomous tool calling.
+* **🎨 Ephemeral Studio**: Rapid single-turn document, receipt, and scene inspection using a hybrid OCR-VLM pipeline.
+* **📚 MindSpace Notebooks**: An on-device multimodal research workspace (NotebookLM-style) featuring asset ingestion (screenshots, photos, documents), Modality-Balanced Hybrid Retrieval (FTS5 + Cosine RRF), and two-stage deep web research synthesis.
+* **🤝 Message Profiler & Advisor**: An interpersonal communication advisor that analyzes conversational subtext from chat screenshots or text scenarios, generates 3-tier strategic reply options, tracks contact dynamics, and evolves communication style preferences through user feedback.
 
-------------------------------------------------------------------------
+---
 
 ## 1. System Overview & Core Stack
 
-  --------------------------------------------------------------------------
-Area                    Technology                 Purpose
-  ----------------------- -------------------------- -----------------------
-Framework               React Native 0.81.5 / Expo Android application and
-SDK 54                     UI
+| Area | Technology | Purpose |
+| --- | --- | --- |
+| **Framework** | React Native 0.81.5 / Expo SDK 54 | Native Android application runtime and UI |
+| **Inference Runtime** | `llama.rn` (v0.13.0-rc.0) / `llama.cpp` | On-device GGUF inference via native C++/JNI bindings |
+| **GPU Acceleration** | OpenCL / Adreno | Hardware acceleration for Snapdragon mobile chipsets |
+| **Vision & OCR** | Google ML Kit + `expo-image-manipulator` | High-precision on-device OCR (~25ms) and 448px image downscaling |
+| **Database** | `expo-sqlite` / SQLite 3 | WAL mode, SQLite FTS5 full-text search, and vector blob storage |
+| **Secure Storage** | `expo-secure-store` / Android Keystore | Hardware-backed AES-256 storage for API credentials |
+| **Native Storage Bridge** | Custom `ModelFileModule` | Android SAF `content://` URI resolution and GGUF header verification |
+| **System Utilities** | `expo-clipboard`, `expo-document-picker` | Native clipboard interaction and multi-format document picking |
 
-Inference Runtime       `llama.rn` / `llama.cpp`   Local GGUF inference
-through native C++/JNI
-bindings
-
-GPU Acceleration        OpenCL / Adreno            Hardware acceleration
-for supported
-Snapdragon devices
-
-Vision Preprocessing    Google ML Kit +            OCR and memory-bounded
-`expo-image-manipulator`   image preprocessing
-
-Database                `expo-sqlite` / SQLite 3   Local persistence, WAL,
-FTS5, and vector
-metadata
-
-Secure Storage          `expo-secure-store` /      Encrypted API-key
-Android Keystore           storage
-
-Native Storage Bridge   Custom `ModelFileModule`   Android SAF URI
-handling and GGUF
-verification
-  --------------------------------------------------------------------------
-
-------------------------------------------------------------------------
+---
 
 ## 2. Directory Structure
 
-``` text
+```text
 EdgeAnalyzer/
 ├── app/
-│   ├── _layout.tsx                     # Root layout, Safe Area Provider & Global Theme
-│   └── index.tsx                       # Main Chat Controller, Multi-Session Drawer & Navigation
+│   ├── _layout.tsx                         # Root layout, Safe Area Provider & Global Theme
+│   └── index.tsx                           # Main Chat Controller, Workspace Switcher & Routing
 ├── modules/
-│   └── model-file/                     # Custom Native Android Module
-│       ├── android/                    # Native implementation for SAF resolution & GGUF validation
-│       ├── index.ts                    # TypeScript module bridge
+│   └── model-file/                         # Custom Native Android Module
+│       ├── android/                        # Native Java/Kotlin SAF resolver & GGUF validator
+│       ├── index.ts                        # TypeScript bridge
 │       └── src/
-│           └── ModelFileModule.ts      # Native bindings
+│           └── ModelFileModule.ts          # Native method signatures
 ├── src/
 │   ├── components/
-│   │   ├── ConversationDrawer.tsx      # Historical conversation threads
-│   │   ├── ModelRegistryModal.tsx      # Text GGUF / Vision Pair importer
-│   │   └── SearchSettingsModal.tsx     # Search API-key configuration
+│   │   ├── ConversationDrawer.tsx          # Workspace navigation & historical conversation threads
+│   │   ├── ModelRegistryModal.tsx          # Text GGUF / Vision Pair (Base + mmproj) manager
+│   │   └── SearchSettingsModal.tsx         # Search provider and API key configuration
 │   ├── database/
-│   │   ├── db.ts                       # SQLite initializer, WAL and FTS5 setup
-│   │   └── repository.ts               # CRUD queries and persistence operations
+│   │   ├── db.ts                           # SQLite initialization, WAL mode, FTS5 virtual tables
+│   │   └── repository.ts                   # Complete CRUD operations for Models, Notebooks, Contacts, and Vectors
 │   ├── models/
-│   │   └── types.ts                    # Shared model and data contracts
+│   │   └── types.ts                        # Core domain contracts and metadata types
 │   ├── screens/
-│   │   └── StudioScreen.tsx            # Ephemeral multimodal vision workspace
+│   │   ├── StudioScreen.tsx                # Ephemeral multimodal vision playground
+│   │   ├── advisor/
+│   │   │   ├── AdvisorWorkspaceScreen.tsx  # Chat OCR / scenario advisor with 3-tier replies & feedback
+│   │   │   ├── ContactDetailScreen.tsx     # Contact profile, style dynamics, and interaction timeline
+│   │   │   └── RelationshipHubScreen.tsx   # Contact directory, search filter, and quick mode launcher
+│   │   └── mindspace/
+│   │       ├── AssetViewerModal.tsx        # Asset inspector with OCR text, knowledge card, and notes
+│   │       ├── MindspaceHomeScreen.tsx     # Notebook cards directory, color tags, and project creator
+│   │       └── NotebookDetailScreen.tsx    # Dual-Scope RAG chat, asset shelf, and scratchpad modal
 │   ├── services/
-│   │   ├── ContextManager.ts           # Token sliding-window context assembly
-│   │   ├── DocumentInspectorService.ts # OCR + image downscaling pipeline
-│   │   ├── EmbeddingService.ts         # Dedicated embedding engine
-│   │   ├── LLMService.ts               # llama.rn lifecycle, streaming and sampling
-│   │   ├── ModelManager.ts             # Permanent model storage and slot management
-│   │   ├── SecureStorageService.ts     # Encrypted API-key management
-│   │   ├── SemanticMemoryService.ts    # Fact extraction and vector indexing
-│   │   └── ToolOrchestrator.ts         # Agent loop and tool invocation
+│   │   ├── CommunicationAdvisorService.ts  # OCR dialogue extraction, subtext analysis, and style evolution
+│   │   ├── ContextManager.ts               # Token sliding-window context assembly
+│   │   ├── DocumentInspectorService.ts     # ML Kit OCR + 448px image preprocessing
+│   │   ├── EmbeddingService.ts             # Dedicated background embedding instance
+│   │   ├── LLMService.ts                   # llama.rn engine lifecycle, streaming, and sampling
+│   │   ├── MindspaceIngestionService.ts    # Asset staging, OCR extraction, knowledge card generation, and chunking
+│   │   ├── MindspaceRAGService.ts          # Hybrid RRF (FTS5 + Vector) retrieval & modality-balanced RAG
+│   │   ├── MindspaceSynthesisService.ts    # Two-stage autonomous web research & scratchpad report generator
+│   │   ├── ModelManager.ts                 # Permanent storage staging, post-restart safe loader, slot manager
+│   │   ├── SecureStorageService.ts         # Encrypted API key management (Keystore)
+│   │   ├── SemanticMemoryService.ts        # Turn fact extraction and cross-session vector recall
+│   │   └── ToolOrchestrator.ts             # Multi-step tool execution loop & fallback JSON extraction
 │   └── tools/
-│       ├── CalculatorTool.ts            # Sandboxed arithmetic evaluator
-│       ├── DeviceLocationTool.ts       # On-device GPS resolver
-│       ├── ToolRegistry.ts              # Central tool execution registry
-│       ├── types.ts                    # Tool definitions and payload schemas
-│       ├── WeatherTool.ts              # Open-Meteo REST API wrapper
-│       └── WebSearchTool.ts            # Tavily / Brave Search client
+│       ├── CalculatorTool.ts               # Safe mathematical expression evaluator
+│       ├── DeviceLocationTool.ts           # On-device GPS coordinate resolver
+│       ├── ToolRegistry.ts                 # Central tool registry
+│       ├── types.ts                        # Tool interface definitions
+│       ├── WeatherTool.ts                  # Open-Meteo REST API client
+│       └── WebSearchTool.ts                # Keyless Tavily & Brave Search API integration
+
 ```
 
-------------------------------------------------------------------------
+---
 
 ## 3. Core Architectural Pipelines
 
-### A. Hybrid OCR-VLM Pipeline
+### A. Hybrid OCR-VLM & Structured Knowledge Card Ingestion
 
-The vision pipeline separates text extraction from visual understanding.
-Full-resolution OCR is performed locally, while the image sent to the
-vision projector is downscaled to limit memory consumption.
+To eliminate out-of-memory (OOM) crashes and avoid the "information evaporation" that occurs when dropping the multimodal projector (`mmproj`) on subsequent turns, visual assets are converted into permanent, structured textual knowledge representations:
 
-``` mermaid
+```mermaid
 flowchart TD
-    IMAGE["Incoming Image Asset"]
+    IMG["Incoming Image / Screenshot"]
 
-    IMAGE --> OCR["Google ML Kit OCR<br/>Full-resolution text extraction"]
-    IMAGE --> RESIZE["expo-image-manipulator<br/>Longest edge ≤ 448px<br/>JPEG quality 0.75"]
+    IMG --> OCR["Google ML Kit OCR<br/>Full-resolution text extraction (~25ms)"]
+    IMG --> RESIZE["expo-image-manipulator<br/>Longest edge ≤ 448px, JPEG 0.75"]
 
-    OCR --> GROUND["Grounding Context Assembly"]
-    RESIZE --> GROUND
+    OCR --> ROUTE{"Active Model Capability"}
+    RESIZE --> ROUTE
 
-    GROUND --> TURN1["Turn 1: Grounding Prompt<br/>OCR text + 448px image"]
-    TURN1 --> VLM["Vision Model + mmproj<br/>llama.rn / llama.cpp"]
+    ROUTE -->|Vision Model Loaded| VLM["VLM + mmproj Ingestion Pass<br/>Extracts Subjects, Timestamps, Scene & UI"]
+    ROUTE -->|Text-Only Model Loaded| TEXT["Verified OCR Formatter<br/>Zero visual hallucination fallback"]
 
-    VLM --> TEXTCTX["Turn 2+<br/>Text-only conversational context"]
-    TEXTCTX --> LLM["Text Inference"]
+    VLM --> CARD["Structured Asset Knowledge Card<br/>Saved to SQLite notebook_assets"]
+    TEXT --> CARD
+
+    CARD --> CHUNKING["Sliding-Window Semantic Chunking<br/>350-char window, 50-char overlap"]
+    CHUNKING --> EMBED["EmbeddingService (Float32Array)"]
+    EMBED --> DB[("SQLite: asset_chunks & asset_chunks_fts")]
+
 ```
 
-**Design goal:** keep the expensive multimodal step limited to the
-initial grounding turn. Subsequent turns can use the established textual
-context without repeatedly passing the image through the vision
-projector.
+**Subsequent Q&A:** Queries against the asset bypass the vision projector completely. Responses execute with text-only performance (~120ms TTFT) using the structured knowledge card and OCR text.
 
-------------------------------------------------------------------------
+---
 
-### B. Hardware & VRAM Memory Budget
+### B. Dual-Scope Hybrid Retrieval (Reciprocal Rank Fusion)
 
-Model loading options in `LLMService.ts` follow these MVP constraints:
+MindSpace notebooks support two querying scopes:
 
-  -----------------------------------------------------------------------
-Setting                 Value                   Reason
-  ----------------------- ----------------------- -----------------------
-`use_mlock`             `false`                 Avoids locking large
-model allocations into
-RAM
+1. **Single-Asset Scope (`target_asset_id != null`)**: Grounds generation on the target asset's structured card, attached user notes, and complete OCR text.
+2. **Global Notebook Scope (`target_asset_id == null`)**: Executes hybrid search across all assets in the notebook.
 
-`n_gpu_layers`          `99`                    Attempts to offload all
-supported layers to
-Adreno/OpenCL
+To prevent large documents from crowding out screenshots, EdgeAnalyzer uses **Modality-Balanced Reciprocal Rank Fusion (RRF)**:
 
-`n_threads`             `4`                     Limits CPU thread
-contention
+```mermaid
+flowchart TD
+    QUERY["User Prompt"]
 
-Text `n_ctx`            `4096`                  Context window for text
-models
+    QUERY --> DENSE["Dense Semantic Search<br/>Cosine similarity across Float32Array BLOBs"]
+    QUERY --> SPARSE["Sparse Lexical Search<br/>SQLite FTS5 BM25 prefix matching"]
 
-Text `n_batch`          `512`                   Text inference batch
-size
+    DENSE --> RRF["Reciprocal Rank Fusion<br/>Score = 1 / (60 + Rank)"]
+    SPARSE --> RRF
 
-Vision `n_ctx`          `2048`                  Reduced context for
-vision workloads
+    RRF --> PARTITION["Modality Partitioning"]
+    PARTITION --> VISUAL["Visual Candidates (Screenshots/Images)"]
+    PARTITION --> DOCS["Document Candidates (Text/PDFs)"]
 
-Vision `n_batch`        `256`                   Reduced batch size for
-vision workloads
-  -----------------------------------------------------------------------
+    VISUAL --> BALANCE["Balanced Slot Allocation<br/>Top 3 Visual Chunks + Top 3 Document Chunks"]
+    DOCS --> BALANCE
 
-> These values are application-level tuning targets for the supported
-> hardware rather than universal requirements for every Android device.
+    BALANCE --> SYNTHESIS["Grounding Prompt Assembly<br/>Bounded to ≤ 1,500 context tokens"]
+    SYNTHESIS --> LLM["LLMService Completion"]
 
-------------------------------------------------------------------------
-
-### C. Sampling & Anti-Repetition Rules
-
-To reduce repetition loops in small parameter models:
-
-``` text
-penalty_repeat:   1.18
-penalty_present:  0.15
-penalty_last_n:   64
 ```
 
-Explicit stop-token arrays:
+---
 
-**Llama 3**
+### C. Two-Stage Autonomous Deep Web Research & Synthesis
 
-``` text
-<|eot_id|>
-<|end_of_text|>
+When running `⚡ Synthesize` on a research notebook, the pipeline prevents tool-calling runaway and output truncation by splitting the task into two isolated execution stages:
+
+```mermaid
+sequenceDiagram
+    participant User
+    participant Service as MindspaceSynthesisService
+    participant Orchestrator as ToolOrchestrator
+    participant Web as WebSearchTool
+    participant LLM as LLMService
+    participant DB as SQLite (notebook_notes)
+
+    User->>Service: Click ⚡ Synthesize
+    Service->>Service: Compile Asset Briefs (Cards + Notes)
+    
+    Note over Service,Orchestrator: STAGE 1: Live Research Loop (Tools ENABLED)
+    Service->>Orchestrator: Run Research Agent (Identify missing specs/pricing)
+    Orchestrator->>Web: Execute web_search queries
+    Web-->>Orchestrator: Return search snippets
+    Orchestrator-->>Service: Compiled Research Dossier
+
+    Note over Service,LLM: STAGE 2: Clean Report Drafting (Tools DISABLED)
+    Service->>LLM: Stream Final Markdown Report (nPredict: 2048)
+    LLM-->>Service: Structured Executive Summary & Spec Table
+    Service->>DB: Persist directly to Notebook Scratchpad
+    Service-->>User: Open Scratchpad Modal with Complete Report
+
 ```
 
-**ChatML / Qwen / SmolVLM**
+---
 
-``` text
-<|im_end|>
-<|endoftext|>
-<|im_start|>
-```
+### D. Interpersonal Profiler & Communication Advisor Loop
 
-------------------------------------------------------------------------
+The relationship advisor analyzes conversational dynamics and refines contact profiles over time:
 
-### D. Permanent Model Ingestion
-
-Android Storage Access Framework (`content://`) URIs should not be used
-as the long-term model path because access can become invalid after the
-app process or permission state changes.
-
-The ingestion flow is:
-
-``` mermaid
+```mermaid
 flowchart LR
-    PICK["Android SAF Picker"]
-    URI["content:// URI"]
-    NATIVE["ModelFileModule<br/>Native stream copy + GGUF verification"]
-    STORAGE["App Document Storage<br/>models/<timestamp>_<filename>.gguf"]
-    DB["SQLite Models Registry"]
-    LLM["LLMService"]
+    INPUT["Screenshot or Text Scenario"]
+    OCR["ML Kit Header & Dialogue Parser"]
+    MATCH{"Contact Linked?"}
+    PROMPT["Grounded Advisory Prompt<br/>Contact Dynamics + Known Facts + Precedents"]
+    ADVICE["3-Tier Advice JSON<br/>Subtext + Direct / Witty / Diplomatic Replies"]
+    FEEDBACK["Feedback Ingestion<br/>Mark as Sent or Custom Message"]
+    EVOLVE["Async Memory Evolution<br/>Update Style & Extract Facts"]
 
-    PICK --> URI
-    URI --> NATIVE
-    NATIVE --> STORAGE
-    STORAGE --> DB
-    DB --> LLM
+    INPUT --> OCR
+    OCR --> MATCH
+    MATCH -->|No| MODAL["Confirmation Modal: Link / Create / Anonymous"]
+    MATCH -->|Yes| PROMPT
+    MODAL --> PROMPT
+    PROMPT --> ADVICE
+    ADVICE --> FEEDBACK
+    FEEDBACK --> EVOLVE
+
 ```
 
-**Rule:** the inference engine and database should reference the
-permanent internal file rather than the original SAF URI.
+---
 
-For vision models, the companion `mmproj` is stored alongside the base
-model and referenced by its permanent `file://` URI.
+## 4. Hardware & VRAM Memory Budget
 
-------------------------------------------------------------------------
+Model loading parameters in `LLMService.ts` are tuned for mobile SoC architectures (Snapdragon / Adreno):
 
-## 4. Database Schema
+| Setting | Value | Operational Reason |
+| --- | --- | --- |
+| `use_mlock` | `false` | Prevents RAM locking and Android `SurfaceFlinger` deadlocks |
+| `n_gpu_layers` | `99` | Offloads all supported transformer layers to the Adreno GPU via OpenCL |
+| `n_threads` | `4` | Minimizes thread contention on performance cores |
+| Text `n_ctx` | `4096` | Context window allocation for text-only inference |
+| Text `n_batch` | `512` | Batch evaluation size for text processing |
+| Vision `n_ctx` | `2048` | Dedicated context window to conserve VRAM during vision passes |
+| Vision `n_batch` | `256` | Reduced batch evaluation size for multimodal projector layers |
+| Synthesis `n_predict` | `2048` | Output token budget for multi-page research synthesis |
 
-Database file:
+---
 
-``` text
-edge_analyzer.db
-```
+## 5. Database Schema (`edge_analyzer.db`)
 
-### a. `models` Table
+SQLite persistence uses Write-Ahead Logging (WAL) and foreign-key cascades.
 
-  -----------------------------------------------------------------------
-Column                  Type                    Description
-  ----------------------- ----------------------- -----------------------
-`id`                    `TEXT PRIMARY KEY`      UUID
+### A. Core Engine & Conversations
 
-`original_name`         `TEXT`                  Display filename
+#### `models`
 
-`original_uri`          `TEXT`                  Permanent internal
-`file://` URI
+| Column | Type | Description |
+| --- | --- | --- |
+| `id` | `TEXT PRIMARY KEY` | Unique UUID |
+| `original_name` | `TEXT NOT NULL` | Display filename |
+| `original_uri` | `TEXT NOT NULL` | Permanent `file://` URI in internal application storage |
+| `size_bytes` | `INTEGER` | Binary file size |
+| `is_default` | `INTEGER DEFAULT 0` | `1` if default chat model |
+| `is_embedding` | `INTEGER DEFAULT 0` | `1` if locked for background embeddings |
+| `modality` | `TEXT DEFAULT 'text'` | `'text'` or `'vision'` |
+| `mmproj_uri` | `TEXT` | Permanent `file://` URI to companion vision projector |
+| `mmproj_filename` | `TEXT` | Companion projector filename |
+| `mmproj_size_bytes` | `INTEGER` | Projector binary size |
+| `created_at` | `INTEGER NOT NULL` | Epoch timestamp (ms) |
 
-`size_bytes`            `INTEGER`               Binary size in bytes
+#### `conversations` & `messages`
 
-`is_default`            `INTEGER`               `1` if the default chat
-model
+* `conversations`: Manages thread metadata, custom titles, and associated model IDs.
+* `messages`: Stores chat turns (`system`, `user`, `assistant`) with token counts.
+* `messages_fts`: SQLite FTS5 virtual table synchronized via repository transactions for full-text message search.
+* `user_facts`: Cross-session memory facts paired with Float32Array vector embeddings.
 
-`is_embedding`          `INTEGER`               `1` if permanently
-locked as embedding
-model
+---
 
-`modality`              `TEXT`                  `"text"` or `"vision"`
+### B. MindSpace Multimodal Notebooks
 
-`mmproj_uri`            `TEXT`                  Permanent projector
-`file://` URI
+#### `notebooks`
 
-`mmproj_filename`       `TEXT`                  Companion projector
-filename
+| Column | Type | Description |
+| --- | --- | --- |
+| `id` | `TEXT PRIMARY KEY` | `nb_<timestamp>_<uuid>` |
+| `title` | `TEXT NOT NULL` | Notebook title |
+| `description` | `TEXT` | Optional project objective |
+| `color_tag` | `TEXT DEFAULT '#3B82F6'` | Hex color identifier |
+| `notebook_notes` | `TEXT DEFAULT ''` | Global scratchpad containing autonomous synthesis reports |
+| `created_at` | `INTEGER NOT NULL` | Epoch timestamp (ms) |
+| `updated_at` | `INTEGER NOT NULL` | Last modification timestamp (ms) |
 
-`mmproj_size_bytes`     `INTEGER`               Projector size in bytes
+#### `notebook_assets`
 
-`created_at`            `INTEGER`               Epoch timestamp in
-milliseconds
-  -----------------------------------------------------------------------
+| Column | Type | Description |
+| --- | --- | --- |
+| `id` | `TEXT PRIMARY KEY` | `asset_<timestamp>_<uuid>` |
+| `notebook_id` | `TEXT NOT NULL` | Foreign key referencing `notebooks(id)` ON DELETE CASCADE |
+| `type` | `TEXT NOT NULL` | `'screenshot'` | `'image'` | `'text_note'` | `'document'` |
+| `title` | `TEXT NOT NULL` | Asset title / filename |
+| `file_uri` | `TEXT` | Permanent app-private storage URI |
+| `extracted_text` | `TEXT` | Full-resolution ML Kit OCR or raw document text |
+| `structured_card` | `TEXT` | Grounded Markdown knowledge card |
+| `user_note` | `TEXT DEFAULT ''` | User notes attached to this asset |
+| `metadata_json` | `TEXT` | Dimensions, file sizes, token estimates |
+| `created_at` | `INTEGER NOT NULL` | Epoch timestamp (ms) |
 
-### b. `conversations` Table
+#### `asset_chunks` & `asset_chunks_fts`
 
-Column              Type                 Description
-  ------------------- -------------------- ------------------------------------
-`id`                `TEXT PRIMARY KEY`   `conv_<timestamp>_<random>`
-`title`             `TEXT`               Conversation title
-`model_id`          `TEXT`               Associated model ID
-`created_at`        `INTEGER`            Epoch timestamp in milliseconds
-`updated_at`        `INTEGER`            Epoch timestamp in milliseconds
-`system_prompt`     `TEXT`               System instructions for the thread
-`is_custom_title`   `INTEGER`            `1` if renamed by the user
+* `asset_chunks`: Stores 350-character sliding-window text chunks, token counts, and Float32Array vector embeddings (`BLOB`).
+* `asset_chunks_fts`: FTS5 virtual table indexing `chunk_text` for keyword and model-number retrieval.
 
-### c. `messages` & `messages_fts` Tables
+#### `notebook_conversations` & `notebook_messages`
 
-Column              Type                 Description
-  ------------------- -------------------- ----------------------------------------
-`id`                `TEXT PRIMARY KEY`   `msg_<timestamp>_<role>`
-`conversation_id`   `TEXT`               Foreign key to `conversations.id`
-`role`              `TEXT`               `"system"`, `"user"`, or `"assistant"`
-`content`           `TEXT`               Raw message content
-`tokens_count`      `INTEGER`            Number of generated tokens
-`created_at`        `INTEGER`            Epoch timestamp in milliseconds
+* `notebook_conversations`: Scoped conversation threads. `target_asset_id IS NULL` indicates Global Notebook RAG, while an asset ID scopes retrieval to a single asset.
+* `notebook_messages`: Stores message turns along with `sources_json` containing cited asset references.
 
-`messages_fts` provides full-text search over messages. FTS
-synchronization is maintained through repository transactions.
+---
 
-------------------------------------------------------------------------
+### C. Relationship Profiler & Advisor
 
-## 5. Tool Orchestration Contract
+#### `contacts`
 
-`ToolOrchestrator` implements an iterative agent loop with a maximum of
-**3 tool-execution steps**.
+| Column | Type | Description |
+| --- | --- | --- |
+| `id` | `TEXT PRIMARY KEY` | `contact_<timestamp>_<uuid>` |
+| `name` | `TEXT NOT NULL` | Contact name |
+| `platform_handle` | `TEXT` | `@username`, phone number, or email |
+| `default_platform` | `TEXT NOT NULL` | `'whatsapp'` | `'instagram'` | `'slack'` | `'email'` | `'imessage'` | `'linkedin'` |
+| `relationship_type` | `TEXT NOT NULL` | `'Friend'` | `'Colleague'` | `'Manager'` | `'Dating'` | `'Family'` | `'Client'` |
+| `communication_style` | `TEXT` | Evolving description of conversation dynamics |
+| `profile_summary` | `TEXT` | Summary of relationship dynamics |
+| `avatar_color` | `TEXT DEFAULT '#8B5CF6'` | UI avatar accent color |
+| `created_at` | `INTEGER NOT NULL` | Epoch timestamp (ms) |
+| `updated_at` | `INTEGER NOT NULL` | Last interaction timestamp (ms) |
 
-Models request tools using:
+#### `contact_interactions`
 
-``` json
+| Column | Type | Description |
+| --- | --- | --- |
+| `id` | `TEXT PRIMARY KEY` | `inter_<timestamp>_<uuid>` |
+| `contact_id` | `TEXT` | Foreign key referencing `contacts(id)` (NULL for Anonymous Quick Mode) |
+| `source_type` | `TEXT NOT NULL` | `'screenshot'` | `'manual_text'` |
+| `screenshot_uri` | `TEXT` | Permanent file URI of the chat screenshot |
+| `raw_transcript` | `TEXT NOT NULL` | Parsed dialogue |
+| `situation_summary` | `TEXT` | Generated strategic synopsis |
+| `detected_sentiment` | `TEXT` | `'positive'` | `'neutral'` | `'tense'` | `'urgent'` | `'playful'` |
+| `user_intent` | `TEXT` | Target tone or custom goal |
+| `selected_reply` | `TEXT` | The reply option marked as sent |
+| `custom_reply_feedback` | `TEXT` | User's actual sent reply used to adapt style preferences |
+| `created_at` | `INTEGER NOT NULL` | Epoch timestamp (ms) |
+
+#### `contact_facts`
+
+Stores atomic facts extracted from dialogues (e.g., *"Prefers oat milk"*, *"Works as product designer"*) with vector embeddings for semantic recall during advisory generation.
+
+---
+
+## 6. Tool Orchestration Contract
+
+The `ToolOrchestrator` implements an agent loop bounded to **3 tool-execution iterations per turn**.
+
+Models request tools via structured JSON payloads:
+
+```json
 {
   "tool": "<tool_name>",
   "parameters": {
     "<param_key>": "<param_value>"
   }
 }
+
 ```
 
 ### Supported Tools
 
-a. `calculator` Safely evaluates arithmetic expressions using an AST evaluator
+1. `calculator`: Evaluates mathematical expressions using a sandboxed AST parser.
+2. `weather`: Queries Open-Meteo via GPS coordinates or geocoded location names.
+3. `device_location`: Fetches on-device GPS coordinates using Expo Location.
+4. `web_search`:
+* Default: Tavily Keyless endpoint.
+* Pro: Brave Search API (`[https://api.search.brave.com/res/v1/web/search](https://api.search.brave.com/res/v1/web/search)`) with AES-256 encrypted keys in Android Keystore.
 
-b. `weather` Queries Open-Meteo using coordinates or a geocoded city
 
-c. `device_location` Resolves GPS coordinates through Expo Location
 
-d. `web_search` Searches using Tavily or Brave Search
- 
+---
 
-The high-level agent loop is:
+## 7. Application Architecture & Navigation
 
-``` mermaid
-flowchart TD
-    USER["User Query"]
-    CONTEXT["ContextManager<br/>Conversation + Memory Context"]
-    MODEL["Local LLM<br/>llama.rn"]
-    DECISION{"Tool call?"}
-    TOOL["ToolOrchestrator"]
-    RESULT["Tool Result"]
-    RESPONSE["Final Streaming Response"]
+The main interface provides four distinct workspaces accessible from the side drawer:
 
-    USER --> CONTEXT
-    CONTEXT --> MODEL
-    MODEL --> DECISION
+```text
+Drawer Navigation (☰)
+├── 💬 Chat Assistant
+│   ├── Multi-session thread drawer
+│   ├── On-device tool calling
+│   └── Cross-session memory recall
+├── 🎨 Visual Studio
+│   ├── Ephemeral single-turn analysis
+│   └── Document & receipt OCR inspection
+├── 📚 MindSpace Notebooks
+│   ├── Multi-asset research folders
+│   ├── Dual-Scope Hybrid RAG (Global vs. Single-Asset)
+│   ├── Structured Knowledge Cards + Notes
+│   └── ⚡ Deep Research Synthesis to Scratchpad
+└── 🤝 Message Advisor
+    ├── Tracked contact directory & style profiles
+    ├── 📸 Chat screenshot OCR & subtext analysis
+    ├── 3-tier actionable reply generation
+    └── Style reinforcement & anonymous quick mode
 
-    DECISION -->|No| RESPONSE
-    DECISION -->|Yes| TOOL
-    TOOL --> RESULT
-    RESULT --> CONTEXT
-
-    RESPONSE --> USER
 ```
 
-The loop is bounded to three tool-execution steps to prevent
-uncontrolled local agent loops.
+---
 
-------------------------------------------------------------------------
+## 8. Benchmarks & Hardware Performance
 
-## 6. Application Architecture
+Tested on **Snapdragon 8 Elite / Adreno GPU**:
 
-The following diagram summarizes the primary runtime relationships:
-
-``` mermaid
-flowchart TD
-
-    UI["React Native / Expo UI<br/>Chat + Studio"]
-
-    UI --> ROUTER["Application Controller"]
-
-    ROUTER --> CHAT["Chat Flow"]
-    ROUTER --> STUDIO["Ephemeral Studio"]
-
-    %% Chat flow
-    CHAT --> CONTEXT["ContextManager<br/>Sliding-window context"]
-    CONTEXT --> MEMORY["SemanticMemoryService"]
-    MEMORY --> EMBEDDING["EmbeddingService"]
-    EMBEDDING --> DB["SQLite<br/>WAL + FTS5 + Vector Data"]
-
-    MEMORY --> CONTEXT
-    CONTEXT --> LLM["LLMService<br/>llama.rn / llama.cpp"]
-
-    %% Vision flow
-    STUDIO --> OCR["Google ML Kit OCR"]
-    STUDIO --> IMAGE["ImageManipulator<br/>≤ 448px"]
-    OCR --> GROUND["Grounding Context"]
-    IMAGE --> GROUND
-    GROUND --> LLM
-
-    %% Inference
-    LLM --> GPU["Adreno GPU<br/>OpenCL"]
-    GPU --> MODEL["Local GGUF Model"]
-
-    %% Tools
-    LLM --> TOOL_DECISION{"Tool call?"}
-    TOOL_DECISION -->|No| RESPONSE["Streaming Response"]
-    TOOL_DECISION -->|Yes| TOOLS["ToolOrchestrator"]
-
-    TOOLS --> CALC["Calculator"]
-    TOOLS --> GPS["Device Location"]
-    TOOLS --> WEATHER["Open-Meteo"]
-    TOOLS --> SEARCH["Tavily / Brave"]
-
-    CALC --> CONTEXT
-    GPS --> CONTEXT
-    WEATHER --> CONTEXT
-    SEARCH --> CONTEXT
-
-    %% Persistence
-    RESPONSE --> MESSAGE_DB["SQLite<br/>Conversations + Messages"]
-    MESSAGE_DB --> UI
-
-    %% Model management
-    UI --> MODELS["ModelManager"]
-    MODELS --> SAF["Android SAF"]
-    SAF --> NATIVE["ModelFileModule"]
-    NATIVE --> FILES["Permanent App Storage<br/>GGUF + mmproj"]
-    FILES --> LLM
-
-    %% Secure storage
-    SEARCH --> SECURE["SecureStorageService<br/>Android Keystore"]
-```
-
-### Runtime flow in one view
-
-``` text
-User
- │
- ▼
-React Native / Expo UI
- │
- ├─────────────── Chat ─────────────────┐
- │                                      │
- │                               ContextManager
- │                                      │
- │                           ┌──────────┴──────────┐
- │                           │                     │
- │                    Conversation          Semantic Memory
- │                                               │
- │                                        EmbeddingService
- │                                               │
- │                                             SQLite
- │                                               │
- │                           ┌───────────────────┘
- │                           ▼
- │                    LLMService / llama.rn
- │                           │
- │                    llama.cpp / OpenCL
- │                           │
- │                    Adreno GPU
- │                           │
- │                     Local GGUF
- │                           │
- │                    ┌──────┴──────┐
- │                    │             │
- │                 Response       Tool Call
- │                    │             │
- │                    │       ToolOrchestrator
- │                    │       ┌─────┼─────┬─────┐
- │                    │       ▼     ▼     ▼     ▼
- │                    │    Calc    GPS Weather Search
- │                    │       └─────┬─────┬─────┘
- │                    │             │     │
- │                    └─────────────┴─────┘
- │
- └────────────── Studio ────────────────┐
-                                        │
-                                  ML Kit OCR
-                                        │
-                                  Image Resize
-                                        │
-                                  Grounding Prompt
-                                        │
-                                        └──► LLMService
-```
-
-------------------------------------------------------------------------
-
-## 7. Benchmarks & Hardware Performance
-
-Tested on:
-
--   Snapdragon 8 Elite Gen 5 / Adreno GPU
-
-| Model | Task | TTFT | Generation Speed | RAM / VRAM |
-| :--- | :--- | :---: | :---: | :---: |
+| Model | Modality / Task | TTFT (First Token) | Processing Speed | Memory Footprint |
+| --- | --- | --- | --- | --- |
 | **Llama 3.2 3B (Q4_K_M)** | Text / Tool Chat | **~127 ms** | **~24.5 tok/s** | ~1.8 GB |
+| **Llama 3.2 1B (Q4_K_M)** | Lightweight Text & Advice | **~68 ms** | **~46.2 tok/s** | ~820 MB |
 | **SmolVLM 500M (Q8_0 + mmproj)** | Document / Scene QA | **~240 ms** | **~38.0 tok/s** | ~850 MB |
 | **Qwen2-VL 2B (Q4_K_M + mmproj)** | Deep Visual Analysis | **~410 ms** | **~16.2 tok/s** | ~2.1 GB |
-| **Google ML Kit OCR** | Full-Res Text Extraction | **~25 ms** | Instantaneous | ~45 MB |
+| **Google ML Kit OCR** | Full-Res Text Extraction | **~25 ms** | *Instantaneous* | ~45 MB |
 
-> Benchmark values are device-, model-, quantization-, prompt-, and
-> workload-dependent. Treat them as MVP measurements rather than
-> universal performance guarantees.
+---
 
-------------------------------------------------------------------------
+## 9. Recommended Models
 
-## 8. Recommended Models
-
-Compatible GGUF binaries can be obtained from model repositories such as
-Hugging Face.
+Compatible GGUF binaries can be obtained from Hugging Face:
 
 ### Text & Reasoning Models
 
--   **Llama 3.2 3B Instruct**
-    -   Recommended quantizations: `Q4_K_M`, `Q8_0`
-    -   General chat, memory recall, and tool calling
--   **Llama 3.2 1B Instruct**
-    -   Recommended quantization: `Q4_K_M`
-    -   Lower-memory and faster workloads
+* **Llama 3.2 3B Instruct** (`Q4_K_M` or `Q8_0`): General chat, memory synthesis, and tool execution.
+* **Llama 3.2 1B Instruct** (`Q4_K_M`): Low-latency text tasks and rapid reply advice.
 
-### Vision Models
+### Vision Models (Base Model + Companion Projector)
 
-Vision models require a base GGUF model and a compatible companion
-`mmproj`.
+* **SmolVLM 500M Instruct**:
+* Base: `smolvlm-500m-instruct-q8_0.gguf`
+* Projector: `mmproj-smolvlm-500m-f16.gguf`
 
-#### SmolVLM 500M Instruct
 
-``` text
-Base:
-smolvlm-500m-instruct-q8_0.gguf
+* **Qwen2-VL 2B Instruct**:
+* Base: `qwen2-vl-2b-instruct-q4_k_m.gguf`
+* Projector: `mmproj-qwen2-vl-2b-f16.gguf`
 
-Projector:
-mmproj-smolvlm-500m-f16.gguf
-```
 
-#### Qwen2-VL 2B Instruct
 
-``` text
-Base:
-qwen2-vl-2b-instruct-q4_k_m.gguf
+---
 
-Projector:
-mmproj-qwen2-vl-2b-f16.gguf
-```
-
-> Base-model and `mmproj` compatibility must be verified for the exact
-> model conversion and `llama.cpp`/`llama.rn` version being used.
-
-------------------------------------------------------------------------
-
-## 9. Getting Started
+## 10. Getting Started
 
 ### Prerequisites
 
--   Node.js version - 22.23.2
--   Android Studio
--   Android SDK API 34+
--   Android device with OpenCL support for GPU acceleration
--   A compatible GGUF model for local inference
+* Node.js (v20+ or v22.x)
+* Android Studio with Android SDK API 34+
+* Physical Android device with an OpenCL-compatible GPU (recommended for local acceleration)
 
 ### Installation
 
-1.  **Clone the repository**
-
-``` bash
+1. **Clone the repository:**
+```bash
 git clone https://github.com/your-username/EdgeAnalyzer.git
 cd EdgeAnalyzer
+
 ```
 
-2.  **Install dependencies**
 
-``` bash
+2. **Install project dependencies:**
+```bash
 npm install
+
 ```
 
-3.  **Generate native Android files**
 
-``` bash
+3. **Ensure native Expo modules are installed:**
+```bash
+npx expo install expo-clipboard expo-document-picker expo-image-picker expo-image-manipulator expo-sqlite expo-secure-store
+
+```
+
+
+4. **Generate native Android project files:**
+```bash
 npx expo prebuild --platform android
+
 ```
 
-4.  **Run on a connected Android device**
 
-``` bash
+5. **Run the development client on a connected device:**
+```bash
 npx expo run:android
+
 ```
 
-> `expo prebuild` regenerates native project files from the Expo
-> configuration. If you make changes to native configuration or add a
-> package with a config plugin, rerun prebuild before rebuilding the
-> development client.
 
-------------------------------------------------------------------------
 
-## 10. Usage
+---
 
-### Import Models
+## 11. Usage Guide
 
-Open the app and use the **⚙ Settings** icon in the top header to
-import:
+### 1. Import Models
 
--   A text `.gguf` model
--   A vision model pair consisting of:
-    -   Base `.gguf`
-    -   Companion `mmproj`
+* Open the side drawer (☰) or top bar and tap the **⚙ Settings** icon.
+* Import a text `.gguf` model or a **Vision Pair** (Base `.gguf` + Companion `mmproj.gguf`).
+* Imported binaries are automatically verified and staged into internal app storage.
 
-Imported models are copied from the Android Storage Access Framework
-into permanent application storage.
+### 2. MindSpace Multimodal Notebooks
 
-### Chat & Tools
+* Switch to **📚 MindSpace** via the side drawer.
+* Create a notebook (e.g., *"Phone Buying Research"* or *"Project Sync"*).
+* Ingest assets using **📷 Photo**, **🖼️ Screenshot**, or **📄 Doc** (`.txt`, `.md`, `.pdf`, `.json`).
+* Query your knowledge base using the scope toggle:
+* `[ 🌐 Entire Notebook ]`: Evaluates comparisons and spec aggregations across all assets using hybrid RRF.
+* `[ 🎯 Active Asset ]`: Interrogates a single asset using its full-resolution OCR and knowledge card.
 
-Try:
 
--   **Calculator:** `What is 15.4 * 89.2?`
--   **Weather:** `What is the weather in Tokyo right now?`
--   **Web search:** `What is the current exchange rate for USD to EUR?`
+* Tap **⚡ Synthesize** to run autonomous web research and generate a Markdown comparison report in the notebook scratchpad.
 
-Depending on the model and prompt, the local agent can select the
-appropriate tool.
+### 3. Relationship Profiler & Communication Advisor
 
-### Studio
+* Switch to **🤝 Message Advisor** via the side drawer.
+* Create a contact profile or launch **⚡ Anonymous Quick Mode**.
+* Upload a chat screenshot (WhatsApp, Instagram, Slack, Gmail) or enter a text scenario.
+* Select a tone preset (`[ Casual ]`, `[ Witty / Banter ]`, `[ Firm Professional ]`, `[ Diplomatic / Soft ]`) or provide a custom goal.
+* Review the generated **Subtext & Dynamics** breakdown and select from the 3 tailored reply cards.
+* Tap **✓ Mark as Sent** or paste your actual response into **"Sent something different?"** to adapt the contact's style profile for future recommendations.
 
-Switch to **🎨 Studio** to capture or upload:
+---
 
--   Documents
--   Receipts
--   Screenshots
--   Scene photos
+## 12. Security & Privacy Guarantees
 
-The Studio uses the hybrid OCR + VLM pipeline for visual analysis.
+* **100% Local Inference**: LLM text generation, vision inspection, and vector embeddings run strictly on-device.
+* **Local-First Persistence**: Conversations, screenshots, OCR text, contact profiles, and vector chunks remain in local SQLite tables and private app storage.
+* **Hardware-Backed Key Storage**: API tokens for web search providers (Brave / Tavily) are encrypted using AES-256 via the Android Keystore.
+* **Scoped External Connectivity**: Outbound network requests occur only when tools are explicitly invoked (such as Open-Meteo weather lookups or Brave web searches).
 
-------------------------------------------------------------------------
-
-## 11. Security & Privacy
-
-EdgeAnalyzer is designed around local-first processing.
-
--   Model inference occurs on-device.
--   Conversation and memory data are stored locally in SQLite.
--   API keys for supported search providers are stored using secure
-    storage backed by Android Keystore.
--   Imported GGUF files are copied into application-private storage
-    rather than relying on long-lived SAF `content://` URIs.
--   Network access is used only by tools that explicitly require
-    external services, such as weather and web search.
-
-------------------------------------------------------------------------
-
-## 12. Design Constraints & MVP Rules
-
-The following rules are intentional MVP design decisions:
-
-1.  **Never use a raw SAF `content://` URI as the permanent model
-    path.**
-2.  **Keep vision images bounded to a 448px longest edge before VLM
-    inference.**
-3.  **Use a dedicated embedding engine rather than competing with the
-    primary chat model for inference state.**
-4.  **Keep tool execution bounded to three iterations per user
-    request.**
-5.  **Prefer local inference and local persistence.**
-6.  **Avoid memory-locking large model allocations on Android.**
-7.  **Keep text and vision inference configurations separate because
-    their memory characteristics differ.**
-8.  **Use explicit stop tokens for the supported model chat templates.**
-
-------------------------------------------------------------------------
+---
 
 ## 13. Project Status
 
-**MVP 1.0**
+**MVP 2.0**
 
-The architecture described here represents the current MVP design and
-implementation direction. Performance values, supported models, native
-configuration, and tool integrations may evolve as device coverage and
-model compatibility expand.
-
-------------------------------------------------------------------------
-
-## 📄 License
-
-This project is licensed under the MIT License. See the `LICENSE` file
-for details.
+MVP 2.0 introduces persistent multimodal research notebooks (MindSpace) and relationship intelligence profiling alongside the core chat and ephemeral vision engines.

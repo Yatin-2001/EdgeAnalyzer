@@ -754,7 +754,8 @@ const styles = StyleSheet.create({
         backgroundColor: '#1E293B',
         borderRadius: 12,
         padding: 16,
-        maxHeight: '80%',
+        height: '82%', // Definite height for modal bounds
+        overflow: 'hidden', // Clips any inner overflow
     },
     scratchpadHeader: {
         flexDirection: 'row',
@@ -765,12 +766,12 @@ const styles = StyleSheet.create({
     scratchpadTitle: { color: '#F8FAFC', fontSize: 16, fontWeight: '700' },
     scratchpadClose: { color: '#38BDF8', fontSize: 14, fontWeight: '600' },
     scratchpadInput: {
+        flex: 1, // Fills all space between header and button & enables internal scroll
         backgroundColor: '#0F172A',
         color: '#F8FAFC',
         borderRadius: 8,
         padding: 12,
         fontSize: 13,
-        minHeight: 220,
         textAlignVertical: 'top',
         marginBottom: 14,
     },

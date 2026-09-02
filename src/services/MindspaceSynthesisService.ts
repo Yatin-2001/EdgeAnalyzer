@@ -26,8 +26,9 @@ export class MindspaceSynthesisService {
     }
 
     /**
-     * Synthesizes all notebook assets, runs web research for missing facts/prices,
-     * and writes the final markdown report directly into the Notebook Scratchpad.
+     * Two-Stage Synthesis Pipeline:
+     * 1. Live Web Research (Tool Calling Enabled)
+     * 2. Full Markdown Report Generation (Tools Disabled, nPredict: 2048)
      */
     public async synthesizeNotebookToScratchpad(
         notebookId: string,
@@ -41,69 +42,94 @@ export class MindspaceSynthesisService {
             throw new Error('Please add at least one screenshot or document before synthesizing.');
         }
 
-        callbacks.onStatusUpdate('Analyzing all notebook assets & knowledge cards...');
+        callbacks.onStatusUpdate('Analyzing notebook assets & knowledge cards...');
 
-        // 1. Assemble Full Asset Dossier
-        let assetDossier = `### NOTEBOOK TOPIC: "${notebook.title}"\n\n`;
+        // 1. Assemble Asset Dossier
+        let assetBriefs = `### NOTEBOOK ASSETS FOR "${notebook.title}":\n\n`;
         assets.forEach((asset, idx) => {
-            assetDossier += `--- ASSET [${idx + 1}]: "${asset.title}" (${asset.type.toUpperCase()}) ---\n`;
+            assetBriefs += `[Asset ${idx + 1}: "${asset.title}" (${asset.type.toUpperCase()})]\n`;
             if (asset.structured_card) {
-                assetDossier += `Structured Knowledge:\n${asset.structured_card}\n`;
+                assetBriefs += `${asset.structured_card}\n`;
             }
             if (asset.user_note) {
-                assetDossier += `User Notes: ${asset.user_note}\n`;
+                assetBriefs += `User Note: ${asset.user_note}\n`;
             }
-            if (asset.extracted_text) {
-                assetDossier += `OCR / Document Text:\n${asset.extracted_text.substring(0, 800)}\n`;
+            if (asset.extracted_text && !asset.structured_card) {
+                assetBriefs += `Extracted Text: ${asset.extracted_text.substring(0, 500)}\n`;
             }
-            assetDossier += '\n';
+            assetBriefs += '\n';
         });
 
-        callbacks.onStatusUpdate('Identifying missing specs & querying live web data...');
+        // =========================================================================
+        // STAGE 1: Live Web Research Phase (Tools ENABLED)
+        // =========================================================================
+        callbacks.onStatusUpdate('Running live web research for missing facts & pricing...');
 
-        // 2. Build Autonomous Research Prompt
-        const baseSystem =
-            `You are MindSpace Deep Research Agent.\n` +
-            `Your task is to analyze all assets in this research notebook, identify comparison criteria, invoke 'web_search' for missing technical specs, pricing, or reviews, and compile a comprehensive synthesis report.\n` +
-            `The final report MUST be formatted in clean Markdown with:\n` +
-            `1. # Executive Summary\n` +
-            `2. ## Feature & Spec Comparison Table\n` +
-            `3. ## Key Findings & Trade-offs\n` +
-            `4. ## Recommendations & Next Steps`;
+        const researchQuery = `Search web for latest release dates, confirmed platforms, and pricing for: ${notebook.title}`;
+        const researchSystem = this.orchestrator.formatSystemPromptWithTools(
+            'You are a research bot. If needed, call web_search to find facts not in the assets.',
+            researchQuery
+        );
 
-        const userPrompt =
-            `Synthesize all assets in notebook "${notebook.title}". Cross-reference all specs and prices with live web data where needed.`;
-
-        const formattedSystem = this.orchestrator.formatSystemPromptWithTools(baseSystem, userPrompt);
-
-        const fullPrompt =
-            `<|im_start|>system\n${formattedSystem}\n\n${assetDossier}<|im_end|>\n` +
-            `<|im_start|>user\n${userPrompt}<|im_end|>\n` +
+        const researchPrompt =
+            `<|im_start|>system\n${researchSystem}\n\n${assetBriefs}<|im_end|>\n` +
+            `<|im_start|>user\nFind any missing specs or details online for ${notebook.title}.<|im_end|>\n` +
             `<|im_start|>assistant\n`;
 
-        // 3. Execute Autonomous Agentic Loop
-        let generatedReport = '';
-        const result = await this.orchestrator.executeAgentLoop(
-            fullPrompt,
-            userPrompt,
+        let gatheredResearch = '';
+        try {
+            const researchRes = await this.orchestrator.executeAgentLoop(
+                researchPrompt,
+                researchQuery,
+                {
+                    onToken: () => {
+                        // Required by OrchestrationCallbacks; silent during tool execution
+                    },
+                    onToolCallDetected: (tool, params) => {
+                        const query = params?.query || params?.expression || '';
+                        callbacks.onStatusUpdate(`Searching web: "${String(query).substring(0, 35)}..."`);
+                    },
+                    onToolExecutionCompleted: () => {
+                        callbacks.onStatusUpdate('Processing web search results...');
+                    },
+                }
+            );
+            gatheredResearch = researchRes.fullText.trim();
+        } catch {
+            gatheredResearch = 'Web research skipped.';
+        }
+
+        // =========================================================================
+        // STAGE 2: Clean Markdown Report Generation (Tools DISABLED, nPredict: 2048)
+        // =========================================================================
+        callbacks.onStatusUpdate('Compiling comprehensive report to Scratchpad...');
+
+        const finalDraftSystem =
+            `You are an expert analytical report writer. Write a detailed, clean Markdown report synthesizing the assets and live research below.\n` +
+            `Do NOT simulate tool calls, code execution, or internal monologues.\n` +
+            `Format strictly with:\n` +
+            `# Executive Summary\n` +
+            `## Feature & Spec Comparison Table\n` +
+            `## Key Findings & Trade-offs\n` +
+            `## Recommendations & Next Steps`;
+
+        const finalDraftPrompt =
+            `<|im_start|>system\n${finalDraftSystem}\n\n${assetBriefs}\n### LIVE WEB RESEARCH FINDINGS:\n${gatheredResearch}<|im_end|>\n` +
+            `<|im_start|>user\nGenerate the complete Markdown synthesis report now.<|im_end|>\n` +
+            `<|im_start|>assistant\n`;
+
+        const reportRes = await this.llm.streamCompletion(
             {
-                onToken: (tok) => {
-                    generatedReport += tok;
-                    callbacks.onPartialReport?.(tok);
-                },
-                onToolCallDetected: (toolName, params) => {
-                    const query = params.query || params.expression || '';
-                    callbacks.onStatusUpdate(`Searching web: "${query.substring(0, 35)}..."`);
-                },
-                onToolExecutionCompleted: () => {
-                    callbacks.onStatusUpdate('Synthesizing comparison tables & findings...');
-                },
+                prompt: finalDraftPrompt,
+                nPredict: 2048,
+                temperature: 0.2,
+            },
+            {
+                onToken: (tok) => callbacks.onPartialReport?.(tok),
             }
         );
 
-        const finalReport = result.fullText.trim();
-
-        // 4. Automatically persist directly to Notebook Scratchpad in SQLite
+        const finalReport = reportRes.fullText.trim();
         await updateNotebookNotes(notebookId, finalReport);
         callbacks.onStatusUpdate('Report generated and saved to Scratchpad!');
 
