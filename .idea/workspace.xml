@@ -1,0 +1,444 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<project version="4">
+  <component name="AutoImportSettings">
+    <option name="autoReloadType" value="NONE" />
+  </component>
+  <component name="ChangeListManager">
+    <list default="true" id="9134dd4a-86ed-4f97-9f22-348c73acc93d" name="Changes" comment="">
+      <change afterPath="$PROJECT_DIR$/.idea/inspectionProfiles/Project_Default.xml" afterDir="false" />
+      <change afterPath="$PROJECT_DIR$/.idea/workspace.xml" afterDir="false" />
+      <change afterPath="$PROJECT_DIR$/Mobile App Code/android/.gitignore" afterDir="false" />
+      <change afterPath="$PROJECT_DIR$/Mobile App Code/android/app/build.gradle" afterDir="false" />
+      <change afterPath="$PROJECT_DIR$/Mobile App Code/android/app/debug.keystore" afterDir="false" />
+      <change afterPath="$PROJECT_DIR$/Mobile App Code/android/app/proguard-rules.pro" afterDir="false" />
+      <change afterPath="$PROJECT_DIR$/Mobile App Code/android/app/src/debug/AndroidManifest.xml" afterDir="false" />
+      <change afterPath="$PROJECT_DIR$/Mobile App Code/android/app/src/debugOptimized/AndroidManifest.xml" afterDir="false" />
+      <change afterPath="$PROJECT_DIR$/Mobile App Code/android/app/src/main/AndroidManifest.xml" afterDir="false" />
+      <change afterPath="$PROJECT_DIR$/Mobile App Code/android/app/src/main/java/com/localllm/benchmark/MainActivity.kt" afterDir="false" />
+      <change afterPath="$PROJECT_DIR$/Mobile App Code/android/app/src/main/java/com/localllm/benchmark/MainApplication.kt" afterDir="false" />
+      <change afterPath="$PROJECT_DIR$/Mobile App Code/android/app/src/main/res/drawable-hdpi/splashscreen_logo.png" afterDir="false" />
+      <change afterPath="$PROJECT_DIR$/Mobile App Code/android/app/src/main/res/drawable-mdpi/splashscreen_logo.png" afterDir="false" />
+      <change afterPath="$PROJECT_DIR$/Mobile App Code/android/app/src/main/res/drawable-xhdpi/splashscreen_logo.png" afterDir="false" />
+      <change afterPath="$PROJECT_DIR$/Mobile App Code/android/app/src/main/res/drawable-xxhdpi/splashscreen_logo.png" afterDir="false" />
+      <change afterPath="$PROJECT_DIR$/Mobile App Code/android/app/src/main/res/drawable-xxxhdpi/splashscreen_logo.png" afterDir="false" />
+      <change afterPath="$PROJECT_DIR$/Mobile App Code/android/app/src/main/res/drawable/ic_launcher_background.xml" afterDir="false" />
+      <change afterPath="$PROJECT_DIR$/Mobile App Code/android/app/src/main/res/drawable/rn_edit_text_material.xml" afterDir="false" />
+      <change afterPath="$PROJECT_DIR$/Mobile App Code/android/app/src/main/res/mipmap-anydpi-v26/ic_launcher.xml" afterDir="false" />
+      <change afterPath="$PROJECT_DIR$/Mobile App Code/android/app/src/main/res/mipmap-anydpi-v26/ic_launcher_round.xml" afterDir="false" />
+      <change afterPath="$PROJECT_DIR$/Mobile App Code/android/app/src/main/res/mipmap-hdpi/ic_launcher.webp" afterDir="false" />
+      <change afterPath="$PROJECT_DIR$/Mobile App Code/android/app/src/main/res/mipmap-hdpi/ic_launcher_foreground.webp" afterDir="false" />
+      <change afterPath="$PROJECT_DIR$/Mobile App Code/android/app/src/main/res/mipmap-hdpi/ic_launcher_round.webp" afterDir="false" />
+      <change afterPath="$PROJECT_DIR$/Mobile App Code/android/app/src/main/res/mipmap-mdpi/ic_launcher.webp" afterDir="false" />
+      <change afterPath="$PROJECT_DIR$/Mobile App Code/android/app/src/main/res/mipmap-mdpi/ic_launcher_foreground.webp" afterDir="false" />
+      <change afterPath="$PROJECT_DIR$/Mobile App Code/android/app/src/main/res/mipmap-mdpi/ic_launcher_round.webp" afterDir="false" />
+      <change afterPath="$PROJECT_DIR$/Mobile App Code/android/app/src/main/res/mipmap-xhdpi/ic_launcher.webp" afterDir="false" />
+      <change afterPath="$PROJECT_DIR$/Mobile App Code/android/app/src/main/res/mipmap-xhdpi/ic_launcher_foreground.webp" afterDir="false" />
+      <change afterPath="$PROJECT_DIR$/Mobile App Code/android/app/src/main/res/mipmap-xhdpi/ic_launcher_round.webp" afterDir="false" />
+      <change afterPath="$PROJECT_DIR$/Mobile App Code/android/app/src/main/res/mipmap-xxhdpi/ic_launcher.webp" afterDir="false" />
+      <change afterPath="$PROJECT_DIR$/Mobile App Code/android/app/src/main/res/mipmap-xxhdpi/ic_launcher_foreground.webp" afterDir="false" />
+      <change afterPath="$PROJECT_DIR$/Mobile App Code/android/app/src/main/res/mipmap-xxhdpi/ic_launcher_round.webp" afterDir="false" />
+      <change afterPath="$PROJECT_DIR$/Mobile App Code/android/app/src/main/res/mipmap-xxxhdpi/ic_launcher.webp" afterDir="false" />
+      <change afterPath="$PROJECT_DIR$/Mobile App Code/android/app/src/main/res/mipmap-xxxhdpi/ic_launcher_foreground.webp" afterDir="false" />
+      <change afterPath="$PROJECT_DIR$/Mobile App Code/android/app/src/main/res/mipmap-xxxhdpi/ic_launcher_round.webp" afterDir="false" />
+      <change afterPath="$PROJECT_DIR$/Mobile App Code/android/app/src/main/res/values-night/colors.xml" afterDir="false" />
+      <change afterPath="$PROJECT_DIR$/Mobile App Code/android/app/src/main/res/values/colors.xml" afterDir="false" />
+      <change afterPath="$PROJECT_DIR$/Mobile App Code/android/app/src/main/res/values/strings.xml" afterDir="false" />
+      <change afterPath="$PROJECT_DIR$/Mobile App Code/android/app/src/main/res/values/styles.xml" afterDir="false" />
+      <change afterPath="$PROJECT_DIR$/Mobile App Code/android/build.gradle" afterDir="false" />
+      <change afterPath="$PROJECT_DIR$/Mobile App Code/android/gradle.properties" afterDir="false" />
+      <change afterPath="$PROJECT_DIR$/Mobile App Code/android/gradle/wrapper/gradle-wrapper.jar" afterDir="false" />
+      <change afterPath="$PROJECT_DIR$/Mobile App Code/android/gradle/wrapper/gradle-wrapper.properties" afterDir="false" />
+      <change afterPath="$PROJECT_DIR$/Mobile App Code/android/gradlew" afterDir="false" />
+      <change afterPath="$PROJECT_DIR$/Mobile App Code/android/gradlew.bat" afterDir="false" />
+      <change afterPath="$PROJECT_DIR$/Mobile App Code/android/settings.gradle" afterDir="false" />
+      <change afterPath="$PROJECT_DIR$/app-code/.idea/caches/deviceStreaming.xml" afterDir="false" />
+      <change afterPath="$PROJECT_DIR$/app-code/.idea/vcs.xml" afterDir="false" />
+      <change afterPath="$PROJECT_DIR$/app-code/modules/model-file/android/build/.transforms/7ce2b44945899fbd819252cfc46f4916/transformed/classes/classes_dex/classes.dex" afterDir="false" />
+      <change afterPath="$PROJECT_DIR$/app-code/modules/model-file/android/build/intermediates/aapt_friendly_merged_manifests/debug/processDebugManifest/aapt/AndroidManifest.xml" afterDir="false" />
+      <change afterPath="$PROJECT_DIR$/app-code/modules/model-file/android/build/intermediates/incremental/debug/packageDebugResources/compile-file-map.properties" afterDir="false" />
+      <change afterPath="$PROJECT_DIR$/app-code/modules/model-file/android/build/intermediates/incremental/debug/packageDebugResources/merger.xml" afterDir="false" />
+      <change afterPath="$PROJECT_DIR$/app-code/modules/model-file/android/build/intermediates/incremental/mergeDebugAssets/merger.xml" afterDir="false" />
+      <change afterPath="$PROJECT_DIR$/app-code/modules/model-file/android/build/intermediates/incremental/mergeDebugJniLibFolders/merger.xml" afterDir="false" />
+      <change afterPath="$PROJECT_DIR$/app-code/modules/model-file/android/build/intermediates/incremental/mergeDebugShaders/merger.xml" afterDir="false" />
+      <change afterPath="$PROJECT_DIR$/app-code/modules/model-file/android/build/intermediates/manifest_merge_blame_file/debug/processDebugManifest/manifest-merger-blame-debug-report.txt" afterDir="false" />
+      <change afterPath="$PROJECT_DIR$/app-code/modules/model-file/android/build/intermediates/merged_manifest/debug/processDebugManifest/AndroidManifest.xml" afterDir="false" />
+      <change afterPath="$PROJECT_DIR$/app-code/modules/model-file/android/build/kotlin/compileDebugKotlin/cacheable/caches-jvm/inputs/source-to-output.tab.keystream.len" afterDir="false" />
+      <change afterPath="$PROJECT_DIR$/app-code/modules/model-file/android/build/kotlin/compileDebugKotlin/cacheable/caches-jvm/inputs/source-to-output.tab.values.at" afterDir="false" />
+      <change afterPath="$PROJECT_DIR$/app-code/modules/model-file/android/build/kotlin/compileDebugKotlin/cacheable/caches-jvm/jvm/kotlin/class-attributes.tab.keystream.len" afterDir="false" />
+      <change afterPath="$PROJECT_DIR$/app-code/modules/model-file/android/build/kotlin/compileDebugKotlin/cacheable/caches-jvm/jvm/kotlin/class-attributes.tab.len" afterDir="false" />
+      <change afterPath="$PROJECT_DIR$/app-code/modules/model-file/android/build/kotlin/compileDebugKotlin/cacheable/caches-jvm/jvm/kotlin/class-attributes.tab.values.at" afterDir="false" />
+      <change afterPath="$PROJECT_DIR$/app-code/modules/model-file/android/build/kotlin/compileDebugKotlin/cacheable/caches-jvm/jvm/kotlin/class-fq-name-to-source.tab.keystream.len" afterDir="false" />
+      <change afterPath="$PROJECT_DIR$/app-code/modules/model-file/android/build/kotlin/compileDebugKotlin/cacheable/caches-jvm/jvm/kotlin/class-fq-name-to-source.tab.len" afterDir="false" />
+      <change afterPath="$PROJECT_DIR$/app-code/modules/model-file/android/build/kotlin/compileDebugKotlin/cacheable/caches-jvm/jvm/kotlin/class-fq-name-to-source.tab.values.at" afterDir="false" />
+      <change afterPath="$PROJECT_DIR$/app-code/modules/model-file/android/build/kotlin/compileDebugKotlin/cacheable/caches-jvm/jvm/kotlin/constants.tab.keystream" afterDir="false" />
+      <change afterPath="$PROJECT_DIR$/app-code/modules/model-file/android/build/kotlin/compileDebugKotlin/cacheable/caches-jvm/jvm/kotlin/constants.tab.keystream.len" afterDir="false" />
+      <change afterPath="$PROJECT_DIR$/app-code/modules/model-file/android/build/kotlin/compileDebugKotlin/cacheable/caches-jvm/jvm/kotlin/constants.tab.len" afterDir="false" />
+      <change afterPath="$PROJECT_DIR$/app-code/modules/model-file/android/build/kotlin/compileDebugKotlin/cacheable/caches-jvm/jvm/kotlin/constants.tab.values.at" afterDir="false" />
+      <change afterPath="$PROJECT_DIR$/app-code/modules/model-file/android/build/kotlin/compileDebugKotlin/cacheable/caches-jvm/jvm/kotlin/internal-name-to-source.tab.keystream" afterDir="false" />
+      <change afterPath="$PROJECT_DIR$/app-code/modules/model-file/android/build/kotlin/compileDebugKotlin/cacheable/caches-jvm/jvm/kotlin/internal-name-to-source.tab.keystream.len" afterDir="false" />
+      <change afterPath="$PROJECT_DIR$/app-code/modules/model-file/android/build/kotlin/compileDebugKotlin/cacheable/caches-jvm/jvm/kotlin/internal-name-to-source.tab.len" afterDir="false" />
+      <change afterPath="$PROJECT_DIR$/app-code/modules/model-file/android/build/kotlin/compileDebugKotlin/cacheable/caches-jvm/jvm/kotlin/internal-name-to-source.tab.values.at" afterDir="false" />
+      <change afterPath="$PROJECT_DIR$/app-code/modules/model-file/android/build/kotlin/compileDebugKotlin/cacheable/caches-jvm/jvm/kotlin/proto.tab.keystream.len" afterDir="false" />
+      <change afterPath="$PROJECT_DIR$/app-code/modules/model-file/android/build/kotlin/compileDebugKotlin/cacheable/caches-jvm/jvm/kotlin/source-to-classes.tab.keystream.len" afterDir="false" />
+      <change afterPath="$PROJECT_DIR$/app-code/modules/model-file/android/build/kotlin/compileDebugKotlin/cacheable/caches-jvm/jvm/kotlin/source-to-classes.tab.len" afterDir="false" />
+      <change afterPath="$PROJECT_DIR$/app-code/modules/model-file/android/build/kotlin/compileDebugKotlin/cacheable/caches-jvm/jvm/kotlin/source-to-classes.tab.values.at" afterDir="false" />
+      <change afterPath="$PROJECT_DIR$/app-code/modules/model-file/android/build/kotlin/compileDebugKotlin/cacheable/caches-jvm/jvm/kotlin/subtypes.tab.keystream.len" afterDir="false" />
+      <change afterPath="$PROJECT_DIR$/app-code/modules/model-file/android/build/kotlin/compileDebugKotlin/cacheable/caches-jvm/jvm/kotlin/subtypes.tab.len" afterDir="false" />
+      <change afterPath="$PROJECT_DIR$/app-code/modules/model-file/android/build/kotlin/compileDebugKotlin/cacheable/caches-jvm/jvm/kotlin/subtypes.tab.values.at" afterDir="false" />
+      <change afterPath="$PROJECT_DIR$/app-code/modules/model-file/android/build/kotlin/compileDebugKotlin/cacheable/caches-jvm/jvm/kotlin/supertypes.tab.keystream.len" afterDir="false" />
+      <change afterPath="$PROJECT_DIR$/app-code/modules/model-file/android/build/kotlin/compileDebugKotlin/cacheable/caches-jvm/jvm/kotlin/supertypes.tab.len" afterDir="false" />
+      <change afterPath="$PROJECT_DIR$/app-code/modules/model-file/android/build/kotlin/compileDebugKotlin/cacheable/caches-jvm/jvm/kotlin/supertypes.tab.values.at" afterDir="false" />
+      <change afterPath="$PROJECT_DIR$/app-code/modules/model-file/android/build/kotlin/compileDebugKotlin/cacheable/caches-jvm/lookups/counters.tab" afterDir="false" />
+      <change afterPath="$PROJECT_DIR$/app-code/modules/model-file/android/build/kotlin/compileDebugKotlin/cacheable/caches-jvm/lookups/file-to-id.tab.keystream.len" afterDir="false" />
+      <change afterPath="$PROJECT_DIR$/app-code/modules/model-file/android/build/kotlin/compileDebugKotlin/cacheable/caches-jvm/lookups/file-to-id.tab.len" afterDir="false" />
+      <change afterPath="$PROJECT_DIR$/app-code/modules/model-file/android/build/kotlin/compileDebugKotlin/cacheable/caches-jvm/lookups/id-to-file.tab.keystream.len" afterDir="false" />
+      <change afterPath="$PROJECT_DIR$/app-code/modules/model-file/android/build/kotlin/compileDebugKotlin/cacheable/caches-jvm/lookups/id-to-file.tab.len" afterDir="false" />
+      <change afterPath="$PROJECT_DIR$/app-code/modules/model-file/android/build/kotlin/compileDebugKotlin/cacheable/caches-jvm/lookups/id-to-file.tab.values.at" afterDir="false" />
+      <change afterPath="$PROJECT_DIR$/app-code/modules/model-file/android/build/kotlin/compileDebugKotlin/cacheable/caches-jvm/lookups/lookups.tab" afterDir="false" />
+      <change afterPath="$PROJECT_DIR$/app-code/modules/model-file/android/build/kotlin/compileDebugKotlin/cacheable/caches-jvm/lookups/lookups.tab.keystream" afterDir="false" />
+      <change afterPath="$PROJECT_DIR$/app-code/modules/model-file/android/build/kotlin/compileDebugKotlin/cacheable/caches-jvm/lookups/lookups.tab.keystream.len" afterDir="false" />
+      <change afterPath="$PROJECT_DIR$/app-code/modules/model-file/android/build/kotlin/compileDebugKotlin/cacheable/caches-jvm/lookups/lookups.tab.len" afterDir="false" />
+      <change afterPath="$PROJECT_DIR$/app-code/modules/model-file/android/build/kotlin/compileDebugKotlin/cacheable/caches-jvm/lookups/lookups.tab.values.at" afterDir="false" />
+      <change afterPath="$PROJECT_DIR$/app-code/modules/model-file/android/build/kotlin/compileDebugKotlin/cacheable/caches-jvm/lookups/lookups.tab_i" afterDir="false" />
+      <change afterPath="$PROJECT_DIR$/app-code/modules/model-file/android/build/kotlin/compileDebugKotlin/cacheable/caches-jvm/lookups/lookups.tab_i.len" afterDir="false" />
+      <change afterPath="$PROJECT_DIR$/app-code/modules/model-file/android/build/kotlin/compileDebugKotlin/cacheable/last-build.bin" afterDir="false" />
+      <change afterPath="$PROJECT_DIR$/app-code/modules/model-file/android/build/outputs/logs/manifest-merger-debug-report.txt" afterDir="false" />
+      <change afterPath="$PROJECT_DIR$/app-code/modules/model-file/android/build/tmp/kotlin-classes/debug/expo/modules/modelfile/EdgeComputeWorkerService$Companion.class" afterDir="false" />
+      <change afterPath="$PROJECT_DIR$/app-code/modules/model-file/android/build/tmp/kotlin-classes/debug/expo/modules/modelfile/EdgeComputeWorkerService.class" afterDir="false" />
+      <change afterPath="$PROJECT_DIR$/app-code/modules/model-file/android/src/main/AndroidManifest.xml" afterDir="false" />
+      <change afterPath="$PROJECT_DIR$/app-code/modules/model-file/android/src/main/java/expo/modules/modelfile/EdgeComputeWorkerService.kt" afterDir="false" />
+      <change afterPath="$PROJECT_DIR$/app-code/src/components/ComputeTargetSwitcher.tsx" afterDir="false" />
+      <change afterPath="$PROJECT_DIR$/app-code/src/components/MobileWorkerToggle.tsx" afterDir="false" />
+      <change afterPath="$PROJECT_DIR$/app-code/src/components/PairDesktopModal.tsx" afterDir="false" />
+      <change afterPath="$PROJECT_DIR$/app-code/src/services/MeshClientService.ts" afterDir="false" />
+      <change afterPath="$PROJECT_DIR$/app-code/src/services/MobileWorkerService.ts" afterDir="false" />
+      <change afterPath="$PROJECT_DIR$/desktop-daemon/.gitignore" afterDir="false" />
+      <change afterPath="$PROJECT_DIR$/desktop-daemon/admin-ui/.gitignore" afterDir="false" />
+      <change afterPath="$PROJECT_DIR$/desktop-daemon/admin-ui/README.md" afterDir="false" />
+      <change afterPath="$PROJECT_DIR$/desktop-daemon/admin-ui/eslint.config.js" afterDir="false" />
+      <change afterPath="$PROJECT_DIR$/desktop-daemon/admin-ui/index.html" afterDir="false" />
+      <change afterPath="$PROJECT_DIR$/desktop-daemon/admin-ui/package-lock.json" afterDir="false" />
+      <change afterPath="$PROJECT_DIR$/desktop-daemon/admin-ui/package.json" afterDir="false" />
+      <change afterPath="$PROJECT_DIR$/desktop-daemon/admin-ui/public/favicon.svg" afterDir="false" />
+      <change afterPath="$PROJECT_DIR$/desktop-daemon/admin-ui/public/icons.svg" afterDir="false" />
+      <change afterPath="$PROJECT_DIR$/desktop-daemon/admin-ui/src/App.css" afterDir="false" />
+      <change afterPath="$PROJECT_DIR$/desktop-daemon/admin-ui/src/App.tsx" afterDir="false" />
+      <change afterPath="$PROJECT_DIR$/desktop-daemon/admin-ui/src/components/DeviceTable.tsx" afterDir="false" />
+      <change afterPath="$PROJECT_DIR$/desktop-daemon/admin-ui/src/components/OllamaModelShelf.tsx" afterDir="false" />
+      <change afterPath="$PROJECT_DIR$/desktop-daemon/admin-ui/src/components/PairingModal.tsx" afterDir="false" />
+      <change afterPath="$PROJECT_DIR$/desktop-daemon/admin-ui/src/hooks/useMeshAdmin.ts" afterDir="false" />
+      <change afterPath="$PROJECT_DIR$/desktop-daemon/admin-ui/src/index.css" afterDir="false" />
+      <change afterPath="$PROJECT_DIR$/desktop-daemon/admin-ui/src/main.tsx" afterDir="false" />
+      <change afterPath="$PROJECT_DIR$/desktop-daemon/admin-ui/tsconfig.app.json" afterDir="false" />
+      <change afterPath="$PROJECT_DIR$/desktop-daemon/admin-ui/tsconfig.json" afterDir="false" />
+      <change afterPath="$PROJECT_DIR$/desktop-daemon/admin-ui/tsconfig.node.json" afterDir="false" />
+      <change afterPath="$PROJECT_DIR$/desktop-daemon/admin-ui/vite.config.ts" afterDir="false" />
+      <change afterPath="$PROJECT_DIR$/desktop-daemon/package-lock.json" afterDir="false" />
+      <change afterPath="$PROJECT_DIR$/desktop-daemon/package.json" afterDir="false" />
+      <change afterPath="$PROJECT_DIR$/desktop-daemon/paired_devices.json" afterDir="false" />
+      <change afterPath="$PROJECT_DIR$/desktop-daemon/src/mcp/MCPProtocol.ts" afterDir="false" />
+      <change afterPath="$PROJECT_DIR$/desktop-daemon/src/mcp/OllamaBridge.ts" afterDir="false" />
+      <change afterPath="$PROJECT_DIR$/desktop-daemon/src/mesh/DeviceStore.ts" afterDir="false" />
+      <change afterPath="$PROJECT_DIR$/desktop-daemon/src/mesh/DiscoveryService.ts" afterDir="false" />
+      <change afterPath="$PROJECT_DIR$/desktop-daemon/src/mesh/PairingManager.ts" afterDir="false" />
+      <change afterPath="$PROJECT_DIR$/desktop-daemon/src/mesh/SystemTelemetry.ts" afterDir="false" />
+      <change afterPath="$PROJECT_DIR$/desktop-daemon/src/server.ts" afterDir="false" />
+      <change afterPath="$PROJECT_DIR$/desktop-daemon/tsconfig.json" afterDir="false" />
+      <change beforePath="$PROJECT_DIR$/.gitignore" beforeDir="false" afterPath="$PROJECT_DIR$/app-code/.gitignore" afterDir="false" />
+      <change beforePath="$PROJECT_DIR$/.idea/.gitignore" beforeDir="false" afterPath="$PROJECT_DIR$/app-code/.idea/.gitignore" afterDir="false" />
+      <change beforePath="$PROJECT_DIR$/.idea/EdgeAnaLyzer.iml" beforeDir="false" afterPath="$PROJECT_DIR$/app-code/.idea/EdgeAnaLyzer.iml" afterDir="false" />
+      <change beforePath="$PROJECT_DIR$/.idea/modules.xml" beforeDir="false" afterPath="$PROJECT_DIR$/app-code/.idea/modules.xml" afterDir="false" />
+      <change beforePath="$PROJECT_DIR$/.vscode/extensions.json" beforeDir="false" afterPath="$PROJECT_DIR$/app-code/.vscode/extensions.json" afterDir="false" />
+      <change beforePath="$PROJECT_DIR$/.vscode/settings.json" beforeDir="false" afterPath="$PROJECT_DIR$/app-code/.vscode/settings.json" afterDir="false" />
+      <change beforePath="$PROJECT_DIR$/AGENTS.md" beforeDir="false" afterPath="$PROJECT_DIR$/app-code/AGENTS.md" afterDir="false" />
+      <change beforePath="$PROJECT_DIR$/README.md" beforeDir="false" afterPath="$PROJECT_DIR$/app-code/README.md" afterDir="false" />
+      <change beforePath="$PROJECT_DIR$/app.json" beforeDir="false" afterPath="$PROJECT_DIR$/app-code/app.json" afterDir="false" />
+      <change beforePath="$PROJECT_DIR$/app/_layout.tsx" beforeDir="false" afterPath="$PROJECT_DIR$/app-code/app/_layout.tsx" afterDir="false" />
+      <change beforePath="$PROJECT_DIR$/app/index.tsx" beforeDir="false" afterPath="$PROJECT_DIR$/app-code/app/index.tsx" afterDir="false" />
+      <change beforePath="$PROJECT_DIR$/assets/images/android-icon-background.png" beforeDir="false" afterPath="$PROJECT_DIR$/app-code/assets/images/android-icon-background.png" afterDir="false" />
+      <change beforePath="$PROJECT_DIR$/assets/images/android-icon-foreground.png" beforeDir="false" afterPath="$PROJECT_DIR$/app-code/assets/images/android-icon-foreground.png" afterDir="false" />
+      <change beforePath="$PROJECT_DIR$/assets/images/android-icon-monochrome.png" beforeDir="false" afterPath="$PROJECT_DIR$/app-code/assets/images/android-icon-monochrome.png" afterDir="false" />
+      <change beforePath="$PROJECT_DIR$/assets/images/favicon.png" beforeDir="false" afterPath="$PROJECT_DIR$/app-code/assets/images/favicon.png" afterDir="false" />
+      <change beforePath="$PROJECT_DIR$/assets/images/icon.png" beforeDir="false" afterPath="$PROJECT_DIR$/app-code/assets/images/icon.png" afterDir="false" />
+      <change beforePath="$PROJECT_DIR$/assets/images/partial-react-logo.png" beforeDir="false" afterPath="$PROJECT_DIR$/app-code/assets/images/partial-react-logo.png" afterDir="false" />
+      <change beforePath="$PROJECT_DIR$/assets/images/react-logo.png" beforeDir="false" afterPath="$PROJECT_DIR$/app-code/assets/images/react-logo.png" afterDir="false" />
+      <change beforePath="$PROJECT_DIR$/assets/images/react-logo@2x.png" beforeDir="false" afterPath="$PROJECT_DIR$/app-code/assets/images/react-logo@2x.png" afterDir="false" />
+      <change beforePath="$PROJECT_DIR$/assets/images/react-logo@3x.png" beforeDir="false" afterPath="$PROJECT_DIR$/app-code/assets/images/react-logo@3x.png" afterDir="false" />
+      <change beforePath="$PROJECT_DIR$/assets/images/splash-icon.png" beforeDir="false" afterPath="$PROJECT_DIR$/app-code/assets/images/splash-icon.png" afterDir="false" />
+      <change beforePath="$PROJECT_DIR$/eslint.config.js" beforeDir="false" afterPath="$PROJECT_DIR$/app-code/eslint.config.js" afterDir="false" />
+      <change beforePath="$PROJECT_DIR$/modules/model-file/.eslintrc.js" beforeDir="false" afterPath="$PROJECT_DIR$/app-code/modules/model-file/.eslintrc.js" afterDir="false" />
+      <change beforePath="$PROJECT_DIR$/modules/model-file/android/build.gradle" beforeDir="false" afterPath="$PROJECT_DIR$/app-code/modules/model-file/android/build.gradle" afterDir="false" />
+      <change beforePath="$PROJECT_DIR$/modules/model-file/android/build/.transforms/2974537b0ff55b4893cc30a399f71d55/results.bin" beforeDir="false" afterPath="$PROJECT_DIR$/app-code/modules/model-file/android/build/.transforms/7ce2b44945899fbd819252cfc46f4916/results.bin" afterDir="false" />
+      <change beforePath="$PROJECT_DIR$/modules/model-file/android/build/.transforms/2974537b0ff55b4893cc30a399f71d55/transformed/classes/classes_dex/classes.dex" beforeDir="false" />
+      <change beforePath="$PROJECT_DIR$/modules/model-file/android/build/.transforms/50c9f19701fb159dd7c2fcae5b820279/results.bin" beforeDir="false" />
+      <change beforePath="$PROJECT_DIR$/modules/model-file/android/build/.transforms/50c9f19701fb159dd7c2fcae5b820279/transformed/classes/classes_dex/classes.dex" beforeDir="false" />
+      <change beforePath="$PROJECT_DIR$/modules/model-file/android/build/.transforms/596fe3d73f77cc2a05eacbd143e901b5/results.bin" beforeDir="false" />
+      <change beforePath="$PROJECT_DIR$/modules/model-file/android/build/.transforms/596fe3d73f77cc2a05eacbd143e901b5/transformed/classes/classes_dex/classes.dex" beforeDir="false" />
+      <change beforePath="$PROJECT_DIR$/modules/model-file/android/build/.transforms/6cce2b2500d3ff3a6a0e2b23235b0d31/results.bin" beforeDir="false" />
+      <change beforePath="$PROJECT_DIR$/modules/model-file/android/build/.transforms/6cce2b2500d3ff3a6a0e2b23235b0d31/transformed/classes/classes_dex/classes.dex" beforeDir="false" />
+      <change beforePath="$PROJECT_DIR$/modules/model-file/android/build/.transforms/c351689af7dd533827cc92036e012973/results.bin" beforeDir="false" />
+      <change beforePath="$PROJECT_DIR$/modules/model-file/android/build/.transforms/c351689af7dd533827cc92036e012973/transformed/classes/classes_dex/classes.dex" beforeDir="false" />
+      <change beforePath="$PROJECT_DIR$/modules/model-file/android/build/generated/source/buildConfig/debug/expo/modules/modelfile/BuildConfig.java" beforeDir="false" afterPath="$PROJECT_DIR$/app-code/modules/model-file/android/build/generated/source/buildConfig/debug/expo/modules/modelfile/BuildConfig.java" afterDir="false" />
+      <change beforePath="$PROJECT_DIR$/modules/model-file/android/build/intermediates/aapt_friendly_merged_manifests/debug/processDebugManifest/aapt/AndroidManifest.xml" beforeDir="false" />
+      <change beforePath="$PROJECT_DIR$/modules/model-file/android/build/intermediates/aapt_friendly_merged_manifests/debug/processDebugManifest/aapt/output-metadata.json" beforeDir="false" afterPath="$PROJECT_DIR$/app-code/modules/model-file/android/build/intermediates/aapt_friendly_merged_manifests/debug/processDebugManifest/aapt/output-metadata.json" afterDir="false" />
+      <change beforePath="$PROJECT_DIR$/modules/model-file/android/build/intermediates/aar_metadata/debug/writeDebugAarMetadata/aar-metadata.properties" beforeDir="false" afterPath="$PROJECT_DIR$/app-code/modules/model-file/android/build/intermediates/aar_metadata/debug/writeDebugAarMetadata/aar-metadata.properties" afterDir="false" />
+      <change beforePath="$PROJECT_DIR$/modules/model-file/android/build/intermediates/annotation_processor_list/debug/javaPreCompileDebug/annotationProcessors.json" beforeDir="false" afterPath="$PROJECT_DIR$/app-code/modules/model-file/android/build/intermediates/annotation_processor_list/debug/javaPreCompileDebug/annotationProcessors.json" afterDir="false" />
+      <change beforePath="$PROJECT_DIR$/modules/model-file/android/build/intermediates/compile_library_classes_jar/debug/bundleLibCompileToJarDebug/classes.jar" beforeDir="false" afterPath="$PROJECT_DIR$/app-code/modules/model-file/android/build/intermediates/compile_library_classes_jar/debug/bundleLibCompileToJarDebug/classes.jar" afterDir="false" />
+      <change beforePath="$PROJECT_DIR$/modules/model-file/android/build/intermediates/compile_r_class_jar/debug/generateDebugRFile/R.jar" beforeDir="false" afterPath="$PROJECT_DIR$/app-code/modules/model-file/android/build/intermediates/compile_r_class_jar/debug/generateDebugRFile/R.jar" afterDir="false" />
+      <change beforePath="$PROJECT_DIR$/modules/model-file/android/build/intermediates/compile_symbol_list/debug/generateDebugRFile/R.txt" beforeDir="false" afterPath="$PROJECT_DIR$/app-code/modules/model-file/android/build/intermediates/compile_symbol_list/debug/generateDebugRFile/R.txt" afterDir="false" />
+      <change beforePath="$PROJECT_DIR$/modules/model-file/android/build/intermediates/incremental/debug/packageDebugResources/compile-file-map.properties" beforeDir="false" />
+      <change beforePath="$PROJECT_DIR$/modules/model-file/android/build/intermediates/incremental/debug/packageDebugResources/merger.xml" beforeDir="false" />
+      <change beforePath="$PROJECT_DIR$/modules/model-file/android/build/intermediates/incremental/mergeDebugAssets/merger.xml" beforeDir="false" />
+      <change beforePath="$PROJECT_DIR$/modules/model-file/android/build/intermediates/incremental/mergeDebugJniLibFolders/merger.xml" beforeDir="false" />
+      <change beforePath="$PROJECT_DIR$/modules/model-file/android/build/intermediates/incremental/mergeDebugShaders/merger.xml" beforeDir="false" />
+      <change beforePath="$PROJECT_DIR$/modules/model-file/android/build/intermediates/java_res/debug/processDebugJavaRes/out/META-INF/model-file_debug.kotlin_module" beforeDir="false" afterPath="$PROJECT_DIR$/app-code/modules/model-file/android/build/intermediates/java_res/debug/processDebugJavaRes/out/META-INF/model-file_debug.kotlin_module" afterDir="false" />
+      <change beforePath="$PROJECT_DIR$/modules/model-file/android/build/intermediates/javac/debug/compileDebugJavaWithJavac/classes/expo/modules/modelfile/BuildConfig.class" beforeDir="false" afterPath="$PROJECT_DIR$/app-code/modules/model-file/android/build/intermediates/javac/debug/compileDebugJavaWithJavac/classes/expo/modules/modelfile/BuildConfig.class" afterDir="false" />
+      <change beforePath="$PROJECT_DIR$/modules/model-file/android/build/intermediates/local_only_symbol_list/debug/parseDebugLocalResources/R-def.txt" beforeDir="false" afterPath="$PROJECT_DIR$/app-code/modules/model-file/android/build/intermediates/local_only_symbol_list/debug/parseDebugLocalResources/R-def.txt" afterDir="false" />
+      <change beforePath="$PROJECT_DIR$/modules/model-file/android/build/intermediates/manifest_merge_blame_file/debug/processDebugManifest/manifest-merger-blame-debug-report.txt" beforeDir="false" />
+      <change beforePath="$PROJECT_DIR$/modules/model-file/android/build/intermediates/merged_manifest/debug/processDebugManifest/AndroidManifest.xml" beforeDir="false" />
+      <change beforePath="$PROJECT_DIR$/modules/model-file/android/build/intermediates/navigation_json/debug/extractDeepLinksDebug/navigation.json" beforeDir="false" afterPath="$PROJECT_DIR$/app-code/modules/model-file/android/build/intermediates/navigation_json/debug/extractDeepLinksDebug/navigation.json" afterDir="false" />
+      <change beforePath="$PROJECT_DIR$/modules/model-file/android/build/intermediates/nested_resources_validation_report/debug/generateDebugResources/nestedResourcesValidationReport.txt" beforeDir="false" afterPath="$PROJECT_DIR$/app-code/modules/model-file/android/build/intermediates/nested_resources_validation_report/debug/generateDebugResources/nestedResourcesValidationReport.txt" afterDir="false" />
+      <change beforePath="$PROJECT_DIR$/modules/model-file/android/build/intermediates/runtime_library_classes_jar/debug/bundleLibRuntimeToJarDebug/classes.jar" beforeDir="false" afterPath="$PROJECT_DIR$/app-code/modules/model-file/android/build/intermediates/runtime_library_classes_jar/debug/bundleLibRuntimeToJarDebug/classes.jar" afterDir="false" />
+      <change beforePath="$PROJECT_DIR$/modules/model-file/android/build/intermediates/symbol_list_with_package_name/debug/generateDebugRFile/package-aware-r.txt" beforeDir="false" afterPath="$PROJECT_DIR$/app-code/modules/model-file/android/build/intermediates/symbol_list_with_package_name/debug/generateDebugRFile/package-aware-r.txt" afterDir="false" />
+      <change beforePath="$PROJECT_DIR$/modules/model-file/android/build/kotlin/compileDebugKotlin/cacheable/caches-jvm/inputs/source-to-output.tab" beforeDir="false" afterPath="$PROJECT_DIR$/app-code/modules/model-file/android/build/kotlin/compileDebugKotlin/cacheable/caches-jvm/inputs/source-to-output.tab" afterDir="false" />
+      <change beforePath="$PROJECT_DIR$/modules/model-file/android/build/kotlin/compileDebugKotlin/cacheable/caches-jvm/inputs/source-to-output.tab.keystream" beforeDir="false" afterPath="$PROJECT_DIR$/app-code/modules/model-file/android/build/kotlin/compileDebugKotlin/cacheable/caches-jvm/inputs/source-to-output.tab.keystream" afterDir="false" />
+      <change beforePath="$PROJECT_DIR$/modules/model-file/android/build/kotlin/compileDebugKotlin/cacheable/caches-jvm/inputs/source-to-output.tab.keystream.len" beforeDir="false" />
+      <change beforePath="$PROJECT_DIR$/modules/model-file/android/build/kotlin/compileDebugKotlin/cacheable/caches-jvm/inputs/source-to-output.tab.len" beforeDir="false" />
+      <change beforePath="$PROJECT_DIR$/modules/model-file/android/build/kotlin/compileDebugKotlin/cacheable/caches-jvm/inputs/source-to-output.tab.values.at" beforeDir="false" />
+      <change beforePath="$PROJECT_DIR$/modules/model-file/android/build/kotlin/compileDebugKotlin/cacheable/caches-jvm/inputs/source-to-output.tab_i" beforeDir="false" afterPath="$PROJECT_DIR$/app-code/modules/model-file/android/build/kotlin/compileDebugKotlin/cacheable/caches-jvm/inputs/source-to-output.tab_i" afterDir="false" />
+      <change beforePath="$PROJECT_DIR$/modules/model-file/android/build/kotlin/compileDebugKotlin/cacheable/caches-jvm/inputs/source-to-output.tab_i.len" beforeDir="false" afterPath="$PROJECT_DIR$/app-code/modules/model-file/android/build/kotlin/compileDebugKotlin/cacheable/caches-jvm/inputs/source-to-output.tab_i.len" afterDir="false" />
+      <change beforePath="$PROJECT_DIR$/modules/model-file/android/build/kotlin/compileDebugKotlin/cacheable/caches-jvm/jvm/kotlin/class-attributes.tab" beforeDir="false" afterPath="$PROJECT_DIR$/app-code/modules/model-file/android/build/kotlin/compileDebugKotlin/cacheable/caches-jvm/jvm/kotlin/class-attributes.tab" afterDir="false" />
+      <change beforePath="$PROJECT_DIR$/modules/model-file/android/build/kotlin/compileDebugKotlin/cacheable/caches-jvm/jvm/kotlin/class-attributes.tab.keystream" beforeDir="false" afterPath="$PROJECT_DIR$/app-code/modules/model-file/android/build/kotlin/compileDebugKotlin/cacheable/caches-jvm/jvm/kotlin/class-attributes.tab.keystream" afterDir="false" />
+      <change beforePath="$PROJECT_DIR$/modules/model-file/android/build/kotlin/compileDebugKotlin/cacheable/caches-jvm/jvm/kotlin/class-attributes.tab.keystream.len" beforeDir="false" />
+      <change beforePath="$PROJECT_DIR$/modules/model-file/android/build/kotlin/compileDebugKotlin/cacheable/caches-jvm/jvm/kotlin/class-attributes.tab.len" beforeDir="false" />
+      <change beforePath="$PROJECT_DIR$/modules/model-file/android/build/kotlin/compileDebugKotlin/cacheable/caches-jvm/jvm/kotlin/class-attributes.tab.values.at" beforeDir="false" />
+      <change beforePath="$PROJECT_DIR$/modules/model-file/android/build/kotlin/compileDebugKotlin/cacheable/caches-jvm/jvm/kotlin/class-attributes.tab_i" beforeDir="false" afterPath="$PROJECT_DIR$/app-code/modules/model-file/android/build/kotlin/compileDebugKotlin/cacheable/caches-jvm/jvm/kotlin/class-attributes.tab_i" afterDir="false" />
+      <change beforePath="$PROJECT_DIR$/modules/model-file/android/build/kotlin/compileDebugKotlin/cacheable/caches-jvm/jvm/kotlin/class-attributes.tab_i.len" beforeDir="false" afterPath="$PROJECT_DIR$/app-code/modules/model-file/android/build/kotlin/compileDebugKotlin/cacheable/caches-jvm/jvm/kotlin/class-attributes.tab_i.len" afterDir="false" />
+      <change beforePath="$PROJECT_DIR$/modules/model-file/android/build/kotlin/compileDebugKotlin/cacheable/caches-jvm/jvm/kotlin/class-fq-name-to-source.tab" beforeDir="false" afterPath="$PROJECT_DIR$/app-code/modules/model-file/android/build/kotlin/compileDebugKotlin/cacheable/caches-jvm/jvm/kotlin/class-fq-name-to-source.tab" afterDir="false" />
+      <change beforePath="$PROJECT_DIR$/modules/model-file/android/build/kotlin/compileDebugKotlin/cacheable/caches-jvm/jvm/kotlin/class-fq-name-to-source.tab.keystream" beforeDir="false" afterPath="$PROJECT_DIR$/app-code/modules/model-file/android/build/kotlin/compileDebugKotlin/cacheable/caches-jvm/jvm/kotlin/class-fq-name-to-source.tab.keystream" afterDir="false" />
+      <change beforePath="$PROJECT_DIR$/modules/model-file/android/build/kotlin/compileDebugKotlin/cacheable/caches-jvm/jvm/kotlin/class-fq-name-to-source.tab.keystream.len" beforeDir="false" />
+      <change beforePath="$PROJECT_DIR$/modules/model-file/android/build/kotlin/compileDebugKotlin/cacheable/caches-jvm/jvm/kotlin/class-fq-name-to-source.tab.len" beforeDir="false" />
+      <change beforePath="$PROJECT_DIR$/modules/model-file/android/build/kotlin/compileDebugKotlin/cacheable/caches-jvm/jvm/kotlin/class-fq-name-to-source.tab.values.at" beforeDir="false" />
+      <change beforePath="$PROJECT_DIR$/modules/model-file/android/build/kotlin/compileDebugKotlin/cacheable/caches-jvm/jvm/kotlin/class-fq-name-to-source.tab_i" beforeDir="false" afterPath="$PROJECT_DIR$/app-code/modules/model-file/android/build/kotlin/compileDebugKotlin/cacheable/caches-jvm/jvm/kotlin/class-fq-name-to-source.tab_i" afterDir="false" />
+      <change beforePath="$PROJECT_DIR$/modules/model-file/android/build/kotlin/compileDebugKotlin/cacheable/caches-jvm/jvm/kotlin/class-fq-name-to-source.tab_i.len" beforeDir="false" afterPath="$PROJECT_DIR$/app-code/modules/model-file/android/build/kotlin/compileDebugKotlin/cacheable/caches-jvm/jvm/kotlin/class-fq-name-to-source.tab_i.len" afterDir="false" />
+      <change beforePath="$PROJECT_DIR$/modules/model-file/android/build/kotlin/compileDebugKotlin/cacheable/caches-jvm/jvm/kotlin/internal-name-to-source.tab" beforeDir="false" afterPath="$PROJECT_DIR$/app-code/modules/model-file/android/build/kotlin/compileDebugKotlin/cacheable/caches-jvm/jvm/kotlin/internal-name-to-source.tab" afterDir="false" />
+      <change beforePath="$PROJECT_DIR$/modules/model-file/android/build/kotlin/compileDebugKotlin/cacheable/caches-jvm/jvm/kotlin/internal-name-to-source.tab.keystream" beforeDir="false" />
+      <change beforePath="$PROJECT_DIR$/modules/model-file/android/build/kotlin/compileDebugKotlin/cacheable/caches-jvm/jvm/kotlin/internal-name-to-source.tab.keystream.len" beforeDir="false" />
+      <change beforePath="$PROJECT_DIR$/modules/model-file/android/build/kotlin/compileDebugKotlin/cacheable/caches-jvm/jvm/kotlin/internal-name-to-source.tab.len" beforeDir="false" />
+      <change beforePath="$PROJECT_DIR$/modules/model-file/android/build/kotlin/compileDebugKotlin/cacheable/caches-jvm/jvm/kotlin/internal-name-to-source.tab.values.at" beforeDir="false" />
+      <change beforePath="$PROJECT_DIR$/modules/model-file/android/build/kotlin/compileDebugKotlin/cacheable/caches-jvm/jvm/kotlin/internal-name-to-source.tab_i" beforeDir="false" afterPath="$PROJECT_DIR$/app-code/modules/model-file/android/build/kotlin/compileDebugKotlin/cacheable/caches-jvm/jvm/kotlin/internal-name-to-source.tab_i" afterDir="false" />
+      <change beforePath="$PROJECT_DIR$/modules/model-file/android/build/kotlin/compileDebugKotlin/cacheable/caches-jvm/jvm/kotlin/internal-name-to-source.tab_i.len" beforeDir="false" afterPath="$PROJECT_DIR$/app-code/modules/model-file/android/build/kotlin/compileDebugKotlin/cacheable/caches-jvm/jvm/kotlin/constants.tab_i.len" afterDir="false" />
+      <change beforePath="$PROJECT_DIR$/modules/model-file/android/build/kotlin/compileDebugKotlin/cacheable/caches-jvm/jvm/kotlin/proto.tab" beforeDir="false" afterPath="$PROJECT_DIR$/app-code/modules/model-file/android/build/kotlin/compileDebugKotlin/cacheable/caches-jvm/jvm/kotlin/proto.tab" afterDir="false" />
+      <change beforePath="$PROJECT_DIR$/modules/model-file/android/build/kotlin/compileDebugKotlin/cacheable/caches-jvm/jvm/kotlin/proto.tab.keystream" beforeDir="false" afterPath="$PROJECT_DIR$/app-code/modules/model-file/android/build/kotlin/compileDebugKotlin/cacheable/caches-jvm/jvm/kotlin/proto.tab.keystream" afterDir="false" />
+      <change beforePath="$PROJECT_DIR$/modules/model-file/android/build/kotlin/compileDebugKotlin/cacheable/caches-jvm/jvm/kotlin/proto.tab.keystream.len" beforeDir="false" />
+      <change beforePath="$PROJECT_DIR$/modules/model-file/android/build/kotlin/compileDebugKotlin/cacheable/caches-jvm/jvm/kotlin/proto.tab.len" beforeDir="false" afterPath="$PROJECT_DIR$/app-code/modules/model-file/android/build/kotlin/compileDebugKotlin/cacheable/caches-jvm/inputs/source-to-output.tab.len" afterDir="false" />
+      <change beforePath="$PROJECT_DIR$/modules/model-file/android/build/kotlin/compileDebugKotlin/cacheable/caches-jvm/jvm/kotlin/proto.tab.values.at" beforeDir="false" afterPath="$PROJECT_DIR$/app-code/modules/model-file/android/build/kotlin/compileDebugKotlin/cacheable/caches-jvm/jvm/kotlin/proto.tab.values.at" afterDir="false" />
+      <change beforePath="$PROJECT_DIR$/modules/model-file/android/build/kotlin/compileDebugKotlin/cacheable/caches-jvm/jvm/kotlin/proto.tab_i" beforeDir="false" afterPath="$PROJECT_DIR$/app-code/modules/model-file/android/build/kotlin/compileDebugKotlin/cacheable/caches-jvm/jvm/kotlin/proto.tab_i" afterDir="false" />
+      <change beforePath="$PROJECT_DIR$/modules/model-file/android/build/kotlin/compileDebugKotlin/cacheable/caches-jvm/jvm/kotlin/proto.tab_i.len" beforeDir="false" afterPath="$PROJECT_DIR$/app-code/modules/model-file/android/build/kotlin/compileDebugKotlin/cacheable/caches-jvm/jvm/kotlin/internal-name-to-source.tab_i.len" afterDir="false" />
+      <change beforePath="$PROJECT_DIR$/modules/model-file/android/build/kotlin/compileDebugKotlin/cacheable/caches-jvm/jvm/kotlin/source-to-classes.tab" beforeDir="false" afterPath="$PROJECT_DIR$/app-code/modules/model-file/android/build/kotlin/compileDebugKotlin/cacheable/caches-jvm/jvm/kotlin/source-to-classes.tab" afterDir="false" />
+      <change beforePath="$PROJECT_DIR$/modules/model-file/android/build/kotlin/compileDebugKotlin/cacheable/caches-jvm/jvm/kotlin/source-to-classes.tab.keystream" beforeDir="false" afterPath="$PROJECT_DIR$/app-code/modules/model-file/android/build/kotlin/compileDebugKotlin/cacheable/caches-jvm/jvm/kotlin/source-to-classes.tab.keystream" afterDir="false" />
+      <change beforePath="$PROJECT_DIR$/modules/model-file/android/build/kotlin/compileDebugKotlin/cacheable/caches-jvm/jvm/kotlin/source-to-classes.tab.keystream.len" beforeDir="false" />
+      <change beforePath="$PROJECT_DIR$/modules/model-file/android/build/kotlin/compileDebugKotlin/cacheable/caches-jvm/jvm/kotlin/source-to-classes.tab.len" beforeDir="false" />
+      <change beforePath="$PROJECT_DIR$/modules/model-file/android/build/kotlin/compileDebugKotlin/cacheable/caches-jvm/jvm/kotlin/source-to-classes.tab.values.at" beforeDir="false" />
+      <change beforePath="$PROJECT_DIR$/modules/model-file/android/build/kotlin/compileDebugKotlin/cacheable/caches-jvm/jvm/kotlin/source-to-classes.tab_i" beforeDir="false" afterPath="$PROJECT_DIR$/app-code/modules/model-file/android/build/kotlin/compileDebugKotlin/cacheable/caches-jvm/jvm/kotlin/source-to-classes.tab_i" afterDir="false" />
+      <change beforePath="$PROJECT_DIR$/modules/model-file/android/build/kotlin/compileDebugKotlin/cacheable/caches-jvm/jvm/kotlin/source-to-classes.tab_i.len" beforeDir="false" afterPath="$PROJECT_DIR$/app-code/modules/model-file/android/build/kotlin/compileDebugKotlin/cacheable/caches-jvm/jvm/kotlin/proto.tab_i.len" afterDir="false" />
+      <change beforePath="$PROJECT_DIR$/modules/model-file/android/build/kotlin/compileDebugKotlin/cacheable/caches-jvm/jvm/kotlin/subtypes.tab" beforeDir="false" afterPath="$PROJECT_DIR$/app-code/modules/model-file/android/build/kotlin/compileDebugKotlin/cacheable/caches-jvm/jvm/kotlin/subtypes.tab" afterDir="false" />
+      <change beforePath="$PROJECT_DIR$/modules/model-file/android/build/kotlin/compileDebugKotlin/cacheable/caches-jvm/jvm/kotlin/subtypes.tab.keystream" beforeDir="false" afterPath="$PROJECT_DIR$/app-code/modules/model-file/android/build/kotlin/compileDebugKotlin/cacheable/caches-jvm/jvm/kotlin/subtypes.tab.keystream" afterDir="false" />
+      <change beforePath="$PROJECT_DIR$/modules/model-file/android/build/kotlin/compileDebugKotlin/cacheable/caches-jvm/jvm/kotlin/subtypes.tab.keystream.len" beforeDir="false" />
+      <change beforePath="$PROJECT_DIR$/modules/model-file/android/build/kotlin/compileDebugKotlin/cacheable/caches-jvm/jvm/kotlin/subtypes.tab.len" beforeDir="false" />
+      <change beforePath="$PROJECT_DIR$/modules/model-file/android/build/kotlin/compileDebugKotlin/cacheable/caches-jvm/jvm/kotlin/subtypes.tab.values.at" beforeDir="false" />
+      <change beforePath="$PROJECT_DIR$/modules/model-file/android/build/kotlin/compileDebugKotlin/cacheable/caches-jvm/jvm/kotlin/subtypes.tab_i" beforeDir="false" afterPath="$PROJECT_DIR$/app-code/modules/model-file/android/build/kotlin/compileDebugKotlin/cacheable/caches-jvm/jvm/kotlin/subtypes.tab_i" afterDir="false" />
+      <change beforePath="$PROJECT_DIR$/modules/model-file/android/build/kotlin/compileDebugKotlin/cacheable/caches-jvm/jvm/kotlin/subtypes.tab_i.len" beforeDir="false" afterPath="$PROJECT_DIR$/app-code/modules/model-file/android/build/kotlin/compileDebugKotlin/cacheable/caches-jvm/jvm/kotlin/source-to-classes.tab_i.len" afterDir="false" />
+      <change beforePath="$PROJECT_DIR$/modules/model-file/android/build/kotlin/compileDebugKotlin/cacheable/caches-jvm/jvm/kotlin/supertypes.tab" beforeDir="false" afterPath="$PROJECT_DIR$/app-code/modules/model-file/android/build/kotlin/compileDebugKotlin/cacheable/caches-jvm/jvm/kotlin/supertypes.tab" afterDir="false" />
+      <change beforePath="$PROJECT_DIR$/modules/model-file/android/build/kotlin/compileDebugKotlin/cacheable/caches-jvm/jvm/kotlin/supertypes.tab.keystream" beforeDir="false" afterPath="$PROJECT_DIR$/app-code/modules/model-file/android/build/kotlin/compileDebugKotlin/cacheable/caches-jvm/jvm/kotlin/supertypes.tab.keystream" afterDir="false" />
+      <change beforePath="$PROJECT_DIR$/modules/model-file/android/build/kotlin/compileDebugKotlin/cacheable/caches-jvm/jvm/kotlin/supertypes.tab.keystream.len" beforeDir="false" />
+      <change beforePath="$PROJECT_DIR$/modules/model-file/android/build/kotlin/compileDebugKotlin/cacheable/caches-jvm/jvm/kotlin/supertypes.tab.len" beforeDir="false" />
+      <change beforePath="$PROJECT_DIR$/modules/model-file/android/build/kotlin/compileDebugKotlin/cacheable/caches-jvm/jvm/kotlin/supertypes.tab.values.at" beforeDir="false" />
+      <change beforePath="$PROJECT_DIR$/modules/model-file/android/build/kotlin/compileDebugKotlin/cacheable/caches-jvm/jvm/kotlin/supertypes.tab_i" beforeDir="false" afterPath="$PROJECT_DIR$/app-code/modules/model-file/android/build/kotlin/compileDebugKotlin/cacheable/caches-jvm/jvm/kotlin/supertypes.tab_i" afterDir="false" />
+      <change beforePath="$PROJECT_DIR$/modules/model-file/android/build/kotlin/compileDebugKotlin/cacheable/caches-jvm/jvm/kotlin/supertypes.tab_i.len" beforeDir="false" afterPath="$PROJECT_DIR$/app-code/modules/model-file/android/build/kotlin/compileDebugKotlin/cacheable/caches-jvm/jvm/kotlin/subtypes.tab_i.len" afterDir="false" />
+      <change beforePath="$PROJECT_DIR$/modules/model-file/android/build/kotlin/compileDebugKotlin/cacheable/caches-jvm/lookups/counters.tab" beforeDir="false" />
+      <change beforePath="$PROJECT_DIR$/modules/model-file/android/build/kotlin/compileDebugKotlin/cacheable/caches-jvm/lookups/file-to-id.tab" beforeDir="false" afterPath="$PROJECT_DIR$/app-code/modules/model-file/android/build/kotlin/compileDebugKotlin/cacheable/caches-jvm/lookups/file-to-id.tab" afterDir="false" />
+      <change beforePath="$PROJECT_DIR$/modules/model-file/android/build/kotlin/compileDebugKotlin/cacheable/caches-jvm/lookups/file-to-id.tab.keystream" beforeDir="false" afterPath="$PROJECT_DIR$/app-code/modules/model-file/android/build/kotlin/compileDebugKotlin/cacheable/caches-jvm/lookups/file-to-id.tab.keystream" afterDir="false" />
+      <change beforePath="$PROJECT_DIR$/modules/model-file/android/build/kotlin/compileDebugKotlin/cacheable/caches-jvm/lookups/file-to-id.tab.keystream.len" beforeDir="false" />
+      <change beforePath="$PROJECT_DIR$/modules/model-file/android/build/kotlin/compileDebugKotlin/cacheable/caches-jvm/lookups/file-to-id.tab.len" beforeDir="false" />
+      <change beforePath="$PROJECT_DIR$/modules/model-file/android/build/kotlin/compileDebugKotlin/cacheable/caches-jvm/lookups/file-to-id.tab.values.at" beforeDir="false" afterPath="$PROJECT_DIR$/app-code/modules/model-file/android/build/kotlin/compileDebugKotlin/cacheable/caches-jvm/lookups/file-to-id.tab.values.at" afterDir="false" />
+      <change beforePath="$PROJECT_DIR$/modules/model-file/android/build/kotlin/compileDebugKotlin/cacheable/caches-jvm/lookups/file-to-id.tab_i" beforeDir="false" afterPath="$PROJECT_DIR$/app-code/modules/model-file/android/build/kotlin/compileDebugKotlin/cacheable/caches-jvm/lookups/file-to-id.tab_i" afterDir="false" />
+      <change beforePath="$PROJECT_DIR$/modules/model-file/android/build/kotlin/compileDebugKotlin/cacheable/caches-jvm/lookups/file-to-id.tab_i.len" beforeDir="false" afterPath="$PROJECT_DIR$/app-code/modules/model-file/android/build/kotlin/compileDebugKotlin/cacheable/caches-jvm/jvm/kotlin/supertypes.tab_i.len" afterDir="false" />
+      <change beforePath="$PROJECT_DIR$/modules/model-file/android/build/kotlin/compileDebugKotlin/cacheable/caches-jvm/lookups/id-to-file.tab" beforeDir="false" afterPath="$PROJECT_DIR$/app-code/modules/model-file/android/build/kotlin/compileDebugKotlin/cacheable/caches-jvm/lookups/id-to-file.tab" afterDir="false" />
+      <change beforePath="$PROJECT_DIR$/modules/model-file/android/build/kotlin/compileDebugKotlin/cacheable/caches-jvm/lookups/id-to-file.tab.keystream" beforeDir="false" afterPath="$PROJECT_DIR$/app-code/modules/model-file/android/build/kotlin/compileDebugKotlin/cacheable/caches-jvm/lookups/id-to-file.tab.keystream" afterDir="false" />
+      <change beforePath="$PROJECT_DIR$/modules/model-file/android/build/kotlin/compileDebugKotlin/cacheable/caches-jvm/lookups/id-to-file.tab.keystream.len" beforeDir="false" />
+      <change beforePath="$PROJECT_DIR$/modules/model-file/android/build/kotlin/compileDebugKotlin/cacheable/caches-jvm/lookups/id-to-file.tab.len" beforeDir="false" afterPath="$PROJECT_DIR$/app-code/modules/model-file/android/build/kotlin/compileDebugKotlin/cacheable/caches-jvm/jvm/kotlin/proto.tab.len" afterDir="false" />
+      <change beforePath="$PROJECT_DIR$/modules/model-file/android/build/kotlin/compileDebugKotlin/cacheable/caches-jvm/lookups/id-to-file.tab.values.at" beforeDir="false" />
+      <change beforePath="$PROJECT_DIR$/modules/model-file/android/build/kotlin/compileDebugKotlin/cacheable/caches-jvm/lookups/id-to-file.tab_i" beforeDir="false" afterPath="$PROJECT_DIR$/app-code/modules/model-file/android/build/kotlin/compileDebugKotlin/cacheable/caches-jvm/lookups/id-to-file.tab_i" afterDir="false" />
+      <change beforePath="$PROJECT_DIR$/modules/model-file/android/build/kotlin/compileDebugKotlin/cacheable/caches-jvm/lookups/id-to-file.tab_i.len" beforeDir="false" afterPath="$PROJECT_DIR$/app-code/modules/model-file/android/build/kotlin/compileDebugKotlin/cacheable/caches-jvm/lookups/file-to-id.tab_i.len" afterDir="false" />
+      <change beforePath="$PROJECT_DIR$/modules/model-file/android/build/kotlin/compileDebugKotlin/cacheable/caches-jvm/lookups/lookups.tab" beforeDir="false" afterPath="$PROJECT_DIR$/app-code/modules/model-file/android/build/kotlin/compileDebugKotlin/cacheable/caches-jvm/jvm/kotlin/constants.tab" afterDir="false" />
+      <change beforePath="$PROJECT_DIR$/modules/model-file/android/build/kotlin/compileDebugKotlin/cacheable/caches-jvm/lookups/lookups.tab.keystream" beforeDir="false" />
+      <change beforePath="$PROJECT_DIR$/modules/model-file/android/build/kotlin/compileDebugKotlin/cacheable/caches-jvm/lookups/lookups.tab.keystream.len" beforeDir="false" />
+      <change beforePath="$PROJECT_DIR$/modules/model-file/android/build/kotlin/compileDebugKotlin/cacheable/caches-jvm/lookups/lookups.tab.len" beforeDir="false" />
+      <change beforePath="$PROJECT_DIR$/modules/model-file/android/build/kotlin/compileDebugKotlin/cacheable/caches-jvm/lookups/lookups.tab.values.at" beforeDir="false" />
+      <change beforePath="$PROJECT_DIR$/modules/model-file/android/build/kotlin/compileDebugKotlin/cacheable/caches-jvm/lookups/lookups.tab_i" beforeDir="false" afterPath="$PROJECT_DIR$/app-code/modules/model-file/android/build/kotlin/compileDebugKotlin/cacheable/caches-jvm/jvm/kotlin/constants.tab_i" afterDir="false" />
+      <change beforePath="$PROJECT_DIR$/modules/model-file/android/build/kotlin/compileDebugKotlin/cacheable/caches-jvm/lookups/lookups.tab_i.len" beforeDir="false" afterPath="$PROJECT_DIR$/app-code/modules/model-file/android/build/kotlin/compileDebugKotlin/cacheable/caches-jvm/lookups/id-to-file.tab_i.len" afterDir="false" />
+      <change beforePath="$PROJECT_DIR$/modules/model-file/android/build/kotlin/compileDebugKotlin/cacheable/last-build.bin" beforeDir="false" />
+      <change beforePath="$PROJECT_DIR$/modules/model-file/android/build/kotlin/compileDebugKotlin/classpath-snapshot/shrunk-classpath-snapshot.bin" beforeDir="false" afterPath="$PROJECT_DIR$/app-code/modules/model-file/android/build/kotlin/compileDebugKotlin/classpath-snapshot/shrunk-classpath-snapshot.bin" afterDir="false" />
+      <change beforePath="$PROJECT_DIR$/modules/model-file/android/build/outputs/logs/manifest-merger-debug-report.txt" beforeDir="false" />
+      <change beforePath="$PROJECT_DIR$/modules/model-file/android/build/tmp/compileDebugJavaWithJavac/previous-compilation-data.bin" beforeDir="false" afterPath="$PROJECT_DIR$/app-code/modules/model-file/android/build/tmp/compileDebugJavaWithJavac/previous-compilation-data.bin" afterDir="false" />
+      <change beforePath="$PROJECT_DIR$/modules/model-file/android/build/tmp/kotlin-classes/debug/META-INF/model-file_debug.kotlin_module" beforeDir="false" afterPath="$PROJECT_DIR$/app-code/modules/model-file/android/build/tmp/kotlin-classes/debug/META-INF/model-file_debug.kotlin_module" afterDir="false" />
+      <change beforePath="$PROJECT_DIR$/modules/model-file/android/build/tmp/kotlin-classes/debug/expo/modules/modelfile/ModelFileModule$definition$lambda$9$$inlined$AsyncFunction$1.class" beforeDir="false" afterPath="$PROJECT_DIR$/app-code/modules/model-file/android/build/tmp/kotlin-classes/debug/expo/modules/modelfile/ModelFileModule$definition$lambda$9$$inlined$AsyncFunction$1.class" afterDir="false" />
+      <change beforePath="$PROJECT_DIR$/modules/model-file/android/build/tmp/kotlin-classes/debug/expo/modules/modelfile/ModelFileModule$definition$lambda$9$$inlined$AsyncFunction$2.class" beforeDir="false" afterPath="$PROJECT_DIR$/app-code/modules/model-file/android/build/tmp/kotlin-classes/debug/expo/modules/modelfile/ModelFileModule$definition$lambda$9$$inlined$AsyncFunction$2.class" afterDir="false" />
+      <change beforePath="$PROJECT_DIR$/modules/model-file/android/build/tmp/kotlin-classes/debug/expo/modules/modelfile/ModelFileModule$definition$lambda$9$$inlined$AsyncFunction$3.class" beforeDir="false" afterPath="$PROJECT_DIR$/app-code/modules/model-file/android/build/tmp/kotlin-classes/debug/expo/modules/modelfile/ModelFileModule$definition$lambda$9$$inlined$AsyncFunction$3.class" afterDir="false" />
+      <change beforePath="$PROJECT_DIR$/modules/model-file/android/build/tmp/kotlin-classes/debug/expo/modules/modelfile/ModelFileModule$definition$lambda$9$$inlined$AsyncFunction$4.class" beforeDir="false" afterPath="$PROJECT_DIR$/app-code/modules/model-file/android/build/tmp/kotlin-classes/debug/expo/modules/modelfile/ModelFileModule$definition$lambda$9$$inlined$AsyncFunction$4.class" afterDir="false" />
+      <change beforePath="$PROJECT_DIR$/modules/model-file/android/build/tmp/kotlin-classes/debug/expo/modules/modelfile/ModelFileModule$definition$lambda$9$$inlined$AsyncFunction$5.class" beforeDir="false" afterPath="$PROJECT_DIR$/app-code/modules/model-file/android/build/tmp/kotlin-classes/debug/expo/modules/modelfile/ModelFileModule$definition$lambda$9$$inlined$AsyncFunction$5.class" afterDir="false" />
+      <change beforePath="$PROJECT_DIR$/modules/model-file/android/build/tmp/kotlin-classes/debug/expo/modules/modelfile/ModelFileModule$definition$lambda$9$$inlined$AsyncFunction$6.class" beforeDir="false" afterPath="$PROJECT_DIR$/app-code/modules/model-file/android/build/tmp/kotlin-classes/debug/expo/modules/modelfile/ModelFileModule$definition$lambda$9$$inlined$AsyncFunction$6.class" afterDir="false" />
+      <change beforePath="$PROJECT_DIR$/modules/model-file/android/build/tmp/kotlin-classes/debug/expo/modules/modelfile/ModelFileModule$definition$lambda$9$$inlined$AsyncFunction$7.class" beforeDir="false" afterPath="$PROJECT_DIR$/app-code/modules/model-file/android/build/tmp/kotlin-classes/debug/expo/modules/modelfile/ModelFileModule$definition$lambda$9$$inlined$AsyncFunction$7.class" afterDir="false" />
+      <change beforePath="$PROJECT_DIR$/modules/model-file/android/build/tmp/kotlin-classes/debug/expo/modules/modelfile/ModelFileModule$definition$lambda$9$$inlined$AsyncFunction$8.class" beforeDir="false" afterPath="$PROJECT_DIR$/app-code/modules/model-file/android/build/tmp/kotlin-classes/debug/expo/modules/modelfile/ModelFileModule$definition$lambda$9$$inlined$AsyncFunction$8.class" afterDir="false" />
+      <change beforePath="$PROJECT_DIR$/modules/model-file/android/build/tmp/kotlin-classes/debug/expo/modules/modelfile/ModelFileModule$definition$lambda$9$$inlined$AsyncFunction$9.class" beforeDir="false" afterPath="$PROJECT_DIR$/app-code/modules/model-file/android/build/tmp/kotlin-classes/debug/expo/modules/modelfile/ModelFileModule$definition$lambda$9$$inlined$AsyncFunction$9.class" afterDir="false" />
+      <change beforePath="$PROJECT_DIR$/modules/model-file/android/build/tmp/kotlin-classes/debug/expo/modules/modelfile/ModelFileModule.class" beforeDir="false" afterPath="$PROJECT_DIR$/app-code/modules/model-file/android/build/tmp/kotlin-classes/debug/expo/modules/modelfile/ModelFileModule.class" afterDir="false" />
+      <change beforePath="$PROJECT_DIR$/modules/model-file/android/build/tmp/kotlin-classes/debug/expo/modules/modelfile/ModelFileView$webView$1$1.class" beforeDir="false" afterPath="$PROJECT_DIR$/app-code/modules/model-file/android/build/tmp/kotlin-classes/debug/expo/modules/modelfile/ModelFileView$webView$1$1.class" afterDir="false" />
+      <change beforePath="$PROJECT_DIR$/modules/model-file/android/build/tmp/kotlin-classes/debug/expo/modules/modelfile/ModelFileView.class" beforeDir="false" afterPath="$PROJECT_DIR$/app-code/modules/model-file/android/build/tmp/kotlin-classes/debug/expo/modules/modelfile/ModelFileView.class" afterDir="false" />
+      <change beforePath="$PROJECT_DIR$/modules/model-file/android/src/main/AndroidManifest.xml" beforeDir="false" />
+      <change beforePath="$PROJECT_DIR$/modules/model-file/android/src/main/java/expo/modules/modelfile/ModelFileModule.kt" beforeDir="false" afterPath="$PROJECT_DIR$/app-code/modules/model-file/android/src/main/java/expo/modules/modelfile/ModelFileModule.kt" afterDir="false" />
+      <change beforePath="$PROJECT_DIR$/modules/model-file/android/src/main/java/expo/modules/modelfile/ModelFileView.kt" beforeDir="false" afterPath="$PROJECT_DIR$/app-code/modules/model-file/android/src/main/java/expo/modules/modelfile/ModelFileView.kt" afterDir="false" />
+      <change beforePath="$PROJECT_DIR$/modules/model-file/expo-module.config.json" beforeDir="false" afterPath="$PROJECT_DIR$/app-code/modules/model-file/expo-module.config.json" afterDir="false" />
+      <change beforePath="$PROJECT_DIR$/modules/model-file/src/ModelFile.types.ts" beforeDir="false" afterPath="$PROJECT_DIR$/app-code/modules/model-file/src/ModelFile.types.ts" afterDir="false" />
+      <change beforePath="$PROJECT_DIR$/modules/model-file/src/ModelFileModule.ts" beforeDir="false" afterPath="$PROJECT_DIR$/app-code/modules/model-file/src/ModelFileModule.ts" afterDir="false" />
+      <change beforePath="$PROJECT_DIR$/modules/model-file/src/ModelFileModule.web.ts" beforeDir="false" afterPath="$PROJECT_DIR$/app-code/modules/model-file/src/ModelFileModule.web.ts" afterDir="false" />
+      <change beforePath="$PROJECT_DIR$/modules/model-file/src/ModelFileView.tsx" beforeDir="false" afterPath="$PROJECT_DIR$/app-code/modules/model-file/src/ModelFileView.tsx" afterDir="false" />
+      <change beforePath="$PROJECT_DIR$/modules/model-file/src/ModelFileView.web.tsx" beforeDir="false" afterPath="$PROJECT_DIR$/app-code/modules/model-file/src/ModelFileView.web.tsx" afterDir="false" />
+      <change beforePath="$PROJECT_DIR$/package-lock.json" beforeDir="false" afterPath="$PROJECT_DIR$/app-code/package-lock.json" afterDir="false" />
+      <change beforePath="$PROJECT_DIR$/package.json" beforeDir="false" afterPath="$PROJECT_DIR$/app-code/package.json" afterDir="false" />
+      <change beforePath="$PROJECT_DIR$/src/components/ConversationDrawer.tsx" beforeDir="false" afterPath="$PROJECT_DIR$/app-code/src/components/ConversationDrawer.tsx" afterDir="false" />
+      <change beforePath="$PROJECT_DIR$/src/components/ModelRegistryModal.tsx" beforeDir="false" afterPath="$PROJECT_DIR$/app-code/src/components/ModelRegistryModal.tsx" afterDir="false" />
+      <change beforePath="$PROJECT_DIR$/src/components/SearchSettingsModal.tsx" beforeDir="false" afterPath="$PROJECT_DIR$/app-code/src/components/SearchSettingsModal.tsx" afterDir="false" />
+      <change beforePath="$PROJECT_DIR$/src/database/db.ts" beforeDir="false" afterPath="$PROJECT_DIR$/app-code/src/database/db.ts" afterDir="false" />
+      <change beforePath="$PROJECT_DIR$/src/database/repository.ts" beforeDir="false" afterPath="$PROJECT_DIR$/app-code/src/database/repository.ts" afterDir="false" />
+      <change beforePath="$PROJECT_DIR$/src/models/types.ts" beforeDir="false" afterPath="$PROJECT_DIR$/app-code/src/models/types.ts" afterDir="false" />
+      <change beforePath="$PROJECT_DIR$/src/screens/StudioScreen.tsx" beforeDir="false" afterPath="$PROJECT_DIR$/app-code/src/screens/StudioScreen.tsx" afterDir="false" />
+      <change beforePath="$PROJECT_DIR$/src/screens/advisor/AdvisorWorkspaceScreen.tsx" beforeDir="false" afterPath="$PROJECT_DIR$/app-code/src/screens/advisor/AdvisorWorkspaceScreen.tsx" afterDir="false" />
+      <change beforePath="$PROJECT_DIR$/src/screens/advisor/ContactDetailScreen.tsx" beforeDir="false" afterPath="$PROJECT_DIR$/app-code/src/screens/advisor/ContactDetailScreen.tsx" afterDir="false" />
+      <change beforePath="$PROJECT_DIR$/src/screens/advisor/RelationshipHubScreen.tsx" beforeDir="false" afterPath="$PROJECT_DIR$/app-code/src/screens/advisor/RelationshipHubScreen.tsx" afterDir="false" />
+      <change beforePath="$PROJECT_DIR$/src/screens/mindspace/AssetViewerModal.tsx" beforeDir="false" afterPath="$PROJECT_DIR$/app-code/src/screens/mindspace/AssetViewerModal.tsx" afterDir="false" />
+      <change beforePath="$PROJECT_DIR$/src/screens/mindspace/MindspaceHomeScreen.tsx" beforeDir="false" afterPath="$PROJECT_DIR$/app-code/src/screens/mindspace/MindspaceHomeScreen.tsx" afterDir="false" />
+      <change beforePath="$PROJECT_DIR$/src/screens/mindspace/NotebookDetailScreen.tsx" beforeDir="false" afterPath="$PROJECT_DIR$/app-code/src/screens/mindspace/NotebookDetailScreen.tsx" afterDir="false" />
+      <change beforePath="$PROJECT_DIR$/src/services/CommunicationAdvisorService.ts" beforeDir="false" afterPath="$PROJECT_DIR$/app-code/src/services/CommunicationAdvisorService.ts" afterDir="false" />
+      <change beforePath="$PROJECT_DIR$/src/services/ContextManager.ts" beforeDir="false" afterPath="$PROJECT_DIR$/app-code/src/services/ContextManager.ts" afterDir="false" />
+      <change beforePath="$PROJECT_DIR$/src/services/DocumentInspectorService.ts" beforeDir="false" afterPath="$PROJECT_DIR$/app-code/src/services/DocumentInspectorService.ts" afterDir="false" />
+      <change beforePath="$PROJECT_DIR$/src/services/EmbeddingService.ts" beforeDir="false" afterPath="$PROJECT_DIR$/app-code/src/services/EmbeddingService.ts" afterDir="false" />
+      <change beforePath="$PROJECT_DIR$/src/services/LLMService.ts" beforeDir="false" afterPath="$PROJECT_DIR$/app-code/src/services/LLMService.ts" afterDir="false" />
+      <change beforePath="$PROJECT_DIR$/src/services/MindspaceIngestionService.ts" beforeDir="false" afterPath="$PROJECT_DIR$/app-code/src/services/MindspaceIngestionService.ts" afterDir="false" />
+      <change beforePath="$PROJECT_DIR$/src/services/MindspaceRAGService.ts" beforeDir="false" afterPath="$PROJECT_DIR$/app-code/src/services/MindspaceRAGService.ts" afterDir="false" />
+      <change beforePath="$PROJECT_DIR$/src/services/MindspaceSynthesisService.ts" beforeDir="false" afterPath="$PROJECT_DIR$/app-code/src/services/MindspaceSynthesisService.ts" afterDir="false" />
+      <change beforePath="$PROJECT_DIR$/src/services/ModelManager.ts" beforeDir="false" afterPath="$PROJECT_DIR$/app-code/src/services/ModelManager.ts" afterDir="false" />
+      <change beforePath="$PROJECT_DIR$/src/services/SecureStorageService.ts" beforeDir="false" afterPath="$PROJECT_DIR$/app-code/src/services/SecureStorageService.ts" afterDir="false" />
+      <change beforePath="$PROJECT_DIR$/src/services/SemanticMemoryService.ts" beforeDir="false" afterPath="$PROJECT_DIR$/app-code/src/services/SemanticMemoryService.ts" afterDir="false" />
+      <change beforePath="$PROJECT_DIR$/src/services/ToolOrchestrator.ts" beforeDir="false" afterPath="$PROJECT_DIR$/app-code/src/services/ToolOrchestrator.ts" afterDir="false" />
+      <change beforePath="$PROJECT_DIR$/src/tools/ToolRegistry.ts" beforeDir="false" afterPath="$PROJECT_DIR$/app-code/src/tools/ToolRegistry.ts" afterDir="false" />
+      <change beforePath="$PROJECT_DIR$/src/tools/builtin/calculator.ts" beforeDir="false" afterPath="$PROJECT_DIR$/app-code/src/tools/builtin/calculator.ts" afterDir="false" />
+      <change beforePath="$PROJECT_DIR$/src/tools/builtin/location.ts" beforeDir="false" afterPath="$PROJECT_DIR$/app-code/src/tools/builtin/location.ts" afterDir="false" />
+      <change beforePath="$PROJECT_DIR$/src/tools/builtin/weather.ts" beforeDir="false" afterPath="$PROJECT_DIR$/app-code/src/tools/builtin/weather.ts" afterDir="false" />
+      <change beforePath="$PROJECT_DIR$/src/tools/builtin/webSearch.ts" beforeDir="false" afterPath="$PROJECT_DIR$/app-code/src/tools/builtin/webSearch.ts" afterDir="false" />
+      <change beforePath="$PROJECT_DIR$/src/tools/types.ts" beforeDir="false" afterPath="$PROJECT_DIR$/app-code/src/tools/types.ts" afterDir="false" />
+      <change beforePath="$PROJECT_DIR$/tsconfig.json" beforeDir="false" afterPath="$PROJECT_DIR$/app-code/tsconfig.json" afterDir="false" />
+    </list>
+    <option name="SHOW_DIALOG" value="false" />
+    <option name="HIGHLIGHT_CONFLICTS" value="true" />
+    <option name="HIGHLIGHT_NON_ACTIVE_CHANGELIST" value="false" />
+    <option name="LAST_RESOLUTION" value="IGNORE" />
+  </component>
+  <component name="ClangdSettings">
+    <option name="formatViaClangd" value="false" />
+  </component>
+  <component name="FileTemplateManagerImpl">
+    <option name="RECENT_TEMPLATES">
+      <list>
+        <option value="TypeScript File" />
+      </list>
+    </option>
+  </component>
+  <component name="Git.Settings">
+    <option name="RECENT_GIT_ROOT_PATH" value="$PROJECT_DIR$" />
+  </component>
+  <component name="ProjectColorInfo">{
+  &quot;associatedIndex&quot;: 1,
+  &quot;fromUser&quot;: false
+}</component>
+  <component name="ProjectId" id="3IDSv8WxRwCZIdbiTBbGp1WksQG" />
+  <component name="ProjectLevelVcsManager">
+    <ConfirmationsSetting value="1" id="Add" />
+  </component>
+  <component name="ProjectViewState">
+    <option name="hideEmptyMiddlePackages" value="true" />
+    <option name="showLibraryContents" value="true" />
+  </component>
+  <component name="PropertiesComponent"><![CDATA[{
+  "keyToString": {
+    "ModuleVcsDetector.initialDetectionPerformed": "true",
+    "RunOnceActivity.ShowReadmeOnStart": "true",
+    "RunOnceActivity.TerminalTabsStorage.copyFrom.TerminalArrangementManager.252": "true",
+    "RunOnceActivity.cidr.known.project.marker": "true",
+    "RunOnceActivity.git.unshallow": "true",
+    "RunOnceActivity.readMode.enableVisualFormatting": "true",
+    "RunOnceActivity.typescript.service.memoryLimit.init": "true",
+    "cf.first.check.clang-format": "false",
+    "cidr.known.project.marker": "true",
+    "codeWithMe.voiceChat.enabledByDefault": "false",
+    "git-widget-placeholder": "version-3",
+    "ignore.virus.scanning.warn.message": "true",
+    "javascript.preferred.runtime.type.id": "node",
+    "kotlin-language-version-configured": "true",
+    "node.js.detected.package.eslint": "true",
+    "node.js.detected.package.jshint": "true",
+    "node.js.selected.package.eslint": "(autodetect)",
+    "node.js.selected.package.jshint": "",
+    "nodejs_package_manager_path": "npm",
+    "settings.editor.selected.configurable": "SQL Dialects",
+    "ts.external.directory.path": "C:\\Users\\gupta\\Desktop\\EdgeAnaLyzer\\desktop-daemon\\admin-ui\\node_modules\\typescript\\lib"
+  }
+}]]></component>
+  <component name="SharedIndexes">
+    <attachedChunks>
+      <set>
+        <option value="bundled-js-predefined-d6986cc7102b-4abd2a77f808-JavaScript-WS-262.9437.145" />
+      </set>
+    </attachedChunks>
+  </component>
+  <component name="TaskManager">
+    <task active="true" id="Default" summary="Default task">
+      <changelist id="9134dd4a-86ed-4f97-9f22-348c73acc93d" name="Changes" comment="" />
+      <created>1787297877186</created>
+      <option name="number" value="Default" />
+      <option name="presentableId" value="Default" />
+      <updated>1787297877186</updated>
+      <workItem from="1787297878616" duration="2084000" />
+      <workItem from="1787299992115" duration="2000" />
+      <workItem from="1787300009744" duration="1276000" />
+      <workItem from="1787319543902" duration="14283000" />
+      <workItem from="1787419987516" duration="9028000" />
+      <workItem from="1787577445637" duration="90000" />
+      <workItem from="1787577545399" duration="15397000" />
+      <workItem from="1787677920161" duration="2160000" />
+      <workItem from="1787755894488" duration="14754000" />
+      <workItem from="1787985491570" duration="5775000" />
+      <workItem from="1788106258229" duration="1418000" />
+      <workItem from="1788253179466" duration="6440000" />
+      <workItem from="1788280987715" duration="3887000" />
+      <workItem from="1788335184406" duration="10241000" />
+      <workItem from="1788937700963" duration="1514000" />
+      <workItem from="1789011562810" duration="12652000" />
+      <workItem from="1789034251806" duration="2654000" />
+      <workItem from="1789058720999" duration="5132000" />
+      <workItem from="1789065867899" duration="2634000" />
+      <workItem from="1789526193743" duration="352000" />
+    </task>
+    <servers />
+  </component>
+  <component name="TypeScriptGeneratedFilesManager">
+    <option name="version" value="3" />
+  </component>
+  <component name="UnknownFeatures">
+    <option featureType="com.intellij.fileTypeFactory" implementationName="*.ts" />
+  </component>
+  <component name="VcsManagerConfiguration">
+    <MESSAGE value="Initial commit after testing POC - with vulcan/openGL GPU processing offload." />
+    <option name="LAST_COMMIT_MESSAGE" value="Initial commit after testing POC - with vulcan/openGL GPU processing offload." />
+  </component>
+</project>

@@ -1,0 +1,25 @@
+<manifest xmlns:android="http://schemas.android.com/apk/res/android"
+          package="expo.modules.modelfile">
+
+    <uses-permission android:name="android.permission.FOREGROUND_SERVICE" />
+    <uses-permission android:name="android.permission.FOREGROUND_SERVICE_SPECIAL_USE" />
+    <uses-permission android:name="android.permission.WAKE_LOCK" />
+    <uses-permission android:name="android.permission.ACCESS_WIFI_STATE" />
+    <uses-permission android:name="android.permission.CHANGE_WIFI_MULTICAST_STATE" />
+
+    <application>
+        <!-- Allows llama.rn to bypass the Android linker namespace sandbox and link to vendor Adreno OpenCL drivers -->
+        <uses-native-library
+                android:name="libOpenCL.so"
+                android:required="false" />
+
+        <service
+                android:name="expo.modules.modelfile.EdgeComputeWorkerService"
+                android:foregroundServiceType="specialUse"
+                android:exported="false">
+            <property
+                    android:name="android.app.PROPERTY_SPECIAL_USE_FGS_SUBTYPE"
+                    android:value="Edge AI local distributed compute worker" />
+        </service>
+    </application>
+</manifest>

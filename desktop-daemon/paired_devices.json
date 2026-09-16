@@ -1,0 +1,20 @@
+[
+  {
+    "deviceId": "dev_mobile_mtvthpk7_0oscv",
+    "deviceName": "OnePlus 15",
+    "deviceTier": "thick_mobile",
+    "network": {
+      "ip": "192.168.29.145",
+      "port": 0
+    },
+    "capabilities": {
+      "canRunInference": true,
+      "activeModality": "both",
+      "maxContextTokens": 4096,
+      "gpuAccelerator": "OpenCL-Adreno"
+    },
+    "meshToken": "mesh_7d179d9d-380a-4b3a-a395-850a3d2223d9_cf838a1b66f5f413",
+    "pairedAt": 1789067908480,
+    "isRevoked": false
+  }
+]
