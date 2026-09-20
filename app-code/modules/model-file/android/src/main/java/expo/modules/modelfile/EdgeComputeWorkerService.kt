@@ -11,16 +11,31 @@ import android.os.Build
 import android.os.IBinder
 import android.os.PowerManager
 import androidx.core.app.NotificationCompat
+import java.io.BufferedReader
+import java.io.InputStreamReader
+import java.io.OutputStream
+import java.net.ServerSocket
+import java.net.Socket
+import java.util.concurrent.Executors
+import org.json.JSONObject
 
 class EdgeComputeWorkerService : Service() {
     private var wakeLock: PowerManager.WakeLock? = null
     private var wifiLock: WifiManager.WifiLock? = null
+    private var serverSocket: ServerSocket? = null
+    private val threadPool = Executors.newCachedThreadPool()
+    @Volatile private var isRunning = false
 
     companion object {
+        const val PORT = 8082
         const val CHANNEL_ID = "EdgeComputeWorkerChannel"
         const val NOTIFICATION_ID = 4040
         const val ACTION_START = "ACTION_START_WORKER"
         const val ACTION_STOP = "ACTION_STOP_WORKER"
+
+        // Active model and inference handler bridge
+        @Volatile var activeModelName: String = "Llama 3.2 3B (Adreno)"
+        @Volatile var inferenceHandler: ((prompt: String, onToken: (String) -> Unit) -> String)? = null
     }
 
     override fun onCreate() {
@@ -37,9 +52,12 @@ class EdgeComputeWorkerService : Service() {
     }
 
     private fun startWorker() {
+        if (isRunning) return
+        isRunning = true
+
         val notification: Notification = NotificationCompat.Builder(this, CHANNEL_ID)
-            .setContentTitle("EdgeAnalyzer Mesh Node")
-            .setContentText("Serving mobile inference requests to thin clients...")
+            .setContentTitle("EdgeAnalyzer Mesh Node (Active)")
+            .setContentText("Listening on port $PORT • Serving local GPU inference to mesh peers")
             .setSmallIcon(android.R.drawable.stat_notify_sync)
             .setOngoing(true)
             .setPriority(NotificationCompat.PRIORITY_HIGH)
@@ -47,20 +65,134 @@ class EdgeComputeWorkerService : Service() {
 
         startForeground(NOTIFICATION_ID, notification)
 
-        // 1. Acquire WakeLock
         val powerManager = getSystemService(Context.POWER_SERVICE) as PowerManager
         wakeLock = powerManager.newWakeLock(PowerManager.PARTIAL_WAKE_LOCK, "EdgeAnalyzer::WorkerWakeLock").apply {
-            acquire(12 * 60 * 60 * 1000L) // 12h safety ceiling
+            acquire(12 * 60 * 60 * 1000L)
         }
 
-        // 2. Acquire High-Performance Wi-Fi Lock
         val wifiManager = applicationContext.getSystemService(Context.WIFI_SERVICE) as WifiManager
         wifiLock = wifiManager.createWifiLock(WifiManager.WIFI_MODE_FULL_HIGH_PERF, "EdgeAnalyzer::WorkerWifiLock").apply {
             acquire()
         }
+
+        // Launch Embedded TCP HTTP Server
+        threadPool.execute {
+            try {
+                serverSocket = ServerSocket(PORT)
+                while (isRunning && serverSocket?.isClosed == false) {
+                    val clientSocket = serverSocket?.accept() ?: break
+                    threadPool.execute { handleClient(clientSocket) }
+                }
+            } catch (e: Exception) {
+                // Socket closed on stop
+            }
+        }
+    }
+
+    private fun handleClient(socket: Socket) {
+        try {
+            val reader = BufferedReader(InputStreamReader(socket.getInputStream()))
+            val out = socket.getOutputStream()
+
+            val requestLine = reader.readLine() ?: return
+            val parts = requestLine.split(" ")
+            if (parts.size < 2) return
+
+            val method = parts[0]
+            val path = parts[1]
+
+            // Read headers to determine Content-Length
+            var contentLength = 0
+            var line: String?
+            while (reader.readLine().also { line = it } != null) {
+                if (line.isNullOrEmpty()) break
+                if (line!!.lowercase().startsWith("content-length:")) {
+                    contentLength = line!!.substring(15).trim().toIntOrNull() ?: 0
+                }
+            }
+
+            // Route 1: Telemetry & Model Discovery
+            if (method == "GET" && path.startsWith("/api/mesh/telemetry")) {
+                val json = JSONObject().apply {
+                    put("nodeName", "OnePlus 15")
+                    put("tier", "thick_mobile")
+                    put("status", "ready")
+                    put("activeModel", activeModelName)
+                    put("gpu", "Qualcomm Adreno (OpenCL)")
+                    put("models", org.json.JSONArray().apply {
+                        put(JSONObject().apply {
+                            put("name", activeModelName)
+                            put("parameter_size", "3B")
+                            put("size", 2147483648L)
+                        })
+                    })
+                }
+                sendHttpResponse(out, 200, "OK", "application/json", json.toString())
+                return
+            }
+
+            // Route 2: Streaming Inference Execution
+            if (method == "POST" && path.startsWith("/api/mesh/inference")) {
+                val bodyChars = CharArray(contentLength)
+                reader.read(bodyChars, 0, contentLength)
+                val bodyStr = String(bodyChars)
+                val reqJson = JSONObject(bodyStr)
+                val prompt = reqJson.optString("prompt", "")
+
+                // Send HTTP SSE Stream Header
+                val header = "HTTP/1.1 200 OK\r\n" +
+                        "Content-Type: text/event-stream\r\n" +
+                        "Cache-Control: no-cache\r\n" +
+                        "Connection: keep-alive\r\n" +
+                        "Access-Control-Allow-Origin: *\r\n\r\n"
+                out.write(header.toByteArray())
+                out.flush()
+
+                // Execute inference via the registered LLMService bridge
+                val handler = inferenceHandler
+                if (handler != null) {
+                    handler.invoke(prompt) { token ->
+                        try {
+                            val chunk = "data: " + JSONObject().put("token", token).toString() + "\n\n"
+                            out.write(chunk.toByteArray())
+                            out.flush()
+                        } catch (e: Exception) {}
+                    }
+                } else {
+                    val fallback = "data: {\"token\":\"[Error: LLM model not loaded on host phone]\"}\n\n"
+                    out.write(fallback.toByteArray())
+                    out.flush()
+                }
+
+                out.write("data: [DONE]\n\n".toByteArray())
+                out.flush()
+                return
+            }
+
+            // 404 Fallback
+            sendHttpResponse(out, 404, "Not Found", "text/plain", "Not Found")
+        } catch (e: Exception) {
+            // Client closed connection
+        } finally {
+            try { socket.close() } catch (e: Exception) {}
+        }
+    }
+
+    private fun sendHttpResponse(out: OutputStream, code: Int, status: String, contentType: String, body: String) {
+        val bytes = body.toByteArray(Charsets.UTF_8)
+        val response = "HTTP/1.1 $code $status\r\n" +
+                "Content-Type: $contentType\r\n" +
+                "Content-Length: ${bytes.size}\r\n" +
+                "Access-Control-Allow-Origin: *\r\n" +
+                "Connection: close\r\n\r\n"
+        out.write(response.toByteArray())
+        out.write(bytes)
+        out.flush()
     }
 
     private fun stopWorker() {
+        isRunning = false
+        try { serverSocket?.close() } catch (e: Exception) {}
         wakeLock?.let { if (it.isHeld) it.release() }
         wifiLock?.let { if (it.isHeld) it.release() }
         stopForeground(STOP_FOREGROUND_REMOVE)
@@ -74,7 +206,7 @@ class EdgeComputeWorkerService : Service() {
                 "Compute Mesh Worker",
                 NotificationManager.IMPORTANCE_LOW
             ).apply {
-                description = "Keeps the edge compute worker active for client queries"
+                description = "Keeps the local Snapdragon compute worker active for client queries"
             }
             val manager = getSystemService(NotificationManager::class.java)
             manager?.createNotificationChannel(channel)

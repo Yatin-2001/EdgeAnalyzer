@@ -1,5 +1,7 @@
 import crypto from 'crypto';
-import { DeviceStore, type MeshDeviceMetadata } from './DeviceStore.js';
+import fs from 'fs';
+import path from 'path';
+import { DeviceStore, type MeshDeviceMetadata } from './DeviceStore';
 
 interface ActivePinSession {
     pin: string;
@@ -11,8 +13,12 @@ export class PairingManager {
     private static instance: PairingManager;
     private currentSession: ActivePinSession | null = null;
     private store = DeviceStore.getInstance();
+    private clusterSecret: string;
+    private configPath = path.resolve(__dirname, '../../cluster_config.json');
 
-    private constructor() {}
+    private constructor() {
+        this.clusterSecret = this.loadOrCreateClusterSecret();
+    }
 
     public static getInstance(): PairingManager {
         if (!PairingManager.instance) {
@@ -21,17 +27,28 @@ export class PairingManager {
         return PairingManager.instance;
     }
 
+    private loadOrCreateClusterSecret(): string {
+        if (fs.existsSync(this.configPath)) {
+            try {
+                const raw = JSON.parse(fs.readFileSync(this.configPath, 'utf-8'));
+                if (raw.clusterSecret) return raw.clusterSecret;
+            } catch {}
+        }
+        const secret = crypto.randomBytes(32).toString('hex');
+        fs.writeFileSync(this.configPath, JSON.stringify({ clusterSecret: secret }, null, 2), 'utf-8');
+        return secret;
+    }
+
+    public getClusterSecret(): string {
+        return this.clusterSecret;
+    }
+
     public generatePairingPin(): { pin: string; expiresIn: number } {
         const rawPin = crypto.randomInt(100000, 999999).toString();
         const hmacSecret = crypto.randomBytes(32).toString('hex');
         const expiresAt = Date.now() + 60 * 1000;
 
-        this.currentSession = {
-            pin: rawPin,
-            expiresAt,
-            hmacSecret,
-        };
-
+        this.currentSession = { pin: rawPin, expiresAt, hmacSecret };
         return { pin: rawPin, expiresIn: 60 };
     }
 
@@ -48,17 +65,13 @@ export class PairingManager {
     public verifyAndRegisterDevice(
         providedPin: string,
         deviceData: Omit<MeshDeviceMetadata, 'meshToken' | 'pairedAt' | 'isRevoked'>
-    ): { meshToken: string } {
-        if (!this.currentSession) {
-            throw new Error('NO_ACTIVE_PIN_SESSION');
-        }
+    ): { meshToken: string; clusterSecret: string; knownPeers: MeshDeviceMetadata[] } {
+        if (!this.currentSession) throw new Error('NO_ACTIVE_PIN_SESSION');
         if (Date.now() > this.currentSession.expiresAt) {
             this.currentSession = null;
             throw new Error('PIN_EXPIRED');
         }
-        if (this.currentSession.pin !== providedPin.trim()) {
-            throw new Error('INVALID_PIN');
-        }
+        if (this.currentSession.pin !== providedPin.trim()) throw new Error('INVALID_PIN');
 
         const payload = `${deviceData.deviceId}:${Date.now()}`;
         const signature = crypto
@@ -74,9 +87,16 @@ export class PairingManager {
             isRevoked: false,
         };
 
-        this.store.upsert(metadata);
-        this.currentSession = null; // Single-use consumption
+        // Get list of existing peers before saving this new one
+        const knownPeers = this.store.getAll().filter((d) => !d.isRevoked && d.deviceId !== deviceData.deviceId);
 
-        return { meshToken };
+        this.store.upsert(metadata);
+        this.currentSession = null;
+
+        return {
+            meshToken,
+            clusterSecret: this.clusterSecret,
+            knownPeers,
+        };
     }
 }

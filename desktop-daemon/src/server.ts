@@ -74,25 +74,50 @@ app.post('/api/mesh/pair', (req, res) => {
     }
 
     try {
-        const clientIp = req.socket.remoteAddress || 'unknown';
-        const { meshToken } = pairingManager.verifyAndRegisterDevice(pin, {
+        const clientIp = normalizeIp(req.socket.remoteAddress);
+        const { meshToken, clusterSecret, knownPeers } = pairingManager.verifyAndRegisterDevice(pin, {
             deviceId,
             deviceName,
             deviceTier,
             network: { ip: clientIp, port: 0 },
             capabilities: capabilities || {
-                canRunInference: false,
-                activeModality: 'none',
-                maxContextTokens: 2048,
+                canRunInference: deviceTier === 'thick_mobile',
+                activeModality: 'both',
+                maxContextTokens: 4096,
             },
         });
 
-        res.json({ status: 'PAIRED', meshToken });
+        // Broadcast new peer event to all active clients (Peer Introduction)
+        const newPeerAnnouncement = JSON.stringify({
+            jsonrpc: '2.0',
+            method: 'mcp.peer_joined',
+            params: {
+                nodeId: deviceId,
+                nodeName: deviceName,
+                deviceTier,
+                ip: clientIp,
+                sharedToken: meshToken,
+            },
+        });
+
+        for (const [id, socket] of activeSockets.entries()) {
+            if (id !== deviceId && socket.readyState === WebSocket.OPEN) {
+                socket.send(newPeerAnnouncement);
+            }
+        }
+
+        res.json({
+            status: 'PAIRED',
+            meshToken,
+            clusterSecret,
+            peerNodeId: `desktop_${os.hostname()}`,
+            peerName: `Desktop (${os.hostname()})`,
+            knownPeers,
+        });
     } catch (err: any) {
         res.status(401).json({ error: err.message });
     }
 });
-
 // 3. Paired Devices Management
 app.get('/api/mesh/devices', (_req, res) => {
     const devices = deviceStore.getAll().map((dev) => ({
@@ -144,6 +169,37 @@ app.get('/api/mesh/telemetry', async (_req, res) => {
         ollama: ollamaAllocation,
         models,
     });
+});
+
+// 4b. HTTP Streaming Inference Fallback
+app.post('/api/mesh/chat', async (req, res) => {
+    const authHeader = req.headers.authorization;
+    const token = authHeader?.replace('Bearer ', '') || (req.query.token as string);
+
+    if (!token || !deviceStore.getByToken(token)) {
+        return res.status(403).json({ error: 'UNAUTHORIZED_MESH_TOKEN' });
+    }
+
+    const { model, messages } = req.body;
+    if (!model || !messages) {
+        return res.status(400).json({ error: 'MISSING_PARAMS' });
+    }
+
+    res.setHeader('Content-Type', 'text/event-stream');
+    res.setHeader('Cache-Control', 'no-cache');
+    res.setHeader('Connection', 'keep-alive');
+
+    try {
+        await ollama.streamChat(model, messages, (tokenChunk) => {
+            res.write(`data: ${JSON.stringify({ token: tokenChunk })}\n\n`);
+        });
+        res.write('data: [DONE]\n\n');
+        res.end();
+    } catch (err: any) {
+        console.error('[server.ts /api/mesh/chat Error]:', err);
+        res.write(`data: ${JSON.stringify({ error: err.message })}\n\n`);
+        res.end();
+    }
 });
 
 // 5. WebSocket Authentication & Heartbeat Pipeline

@@ -41,6 +41,8 @@ export class OllamaBridge {
         messages: Array<{ role: string; content: string; images?: string[] }>,
         onChunk: (text: string) => void
     ): Promise<void> {
+        console.log(`[OllamaBridge] 🚀 Dispatching prompt to model "${model}" (${messages.length} messages)`);
+
         const res = await fetch(`${this.baseUrl}/api/chat`, {
             method: 'POST',
             headers: { 'Content-Type': 'application/json' },
@@ -51,13 +53,20 @@ export class OllamaBridge {
             }),
         });
 
-        if (!res.ok || !res.body) {
-            throw new Error(`Ollama stream error: ${res.statusText}`);
+        if (!res.ok) {
+            const errText = await res.text().catch(() => '');
+            console.error(`[OllamaBridge] ❌ Ollama returned ${res.status}: ${errText}`);
+            throw new Error(`Ollama error (${res.status}): ${errText || res.statusText}`);
+        }
+
+        if (!res.body) {
+            throw new Error('Ollama response body is empty');
         }
 
         const reader = res.body.getReader();
         const decoder = new TextDecoder('utf-8');
         let buffer = '';
+        let tokenCount = 0;
 
         while (true) {
             const { done, value } = await reader.read();
@@ -72,6 +81,7 @@ export class OllamaBridge {
                 try {
                     const parsed = JSON.parse(line);
                     if (parsed.message?.content) {
+                        tokenCount++;
                         onChunk(parsed.message.content);
                     }
                 } catch {
@@ -79,6 +89,8 @@ export class OllamaBridge {
                 }
             }
         }
+
+        console.log(`[OllamaBridge] ✅ Completed generation (${tokenCount} tokens streamed)`);
     }
 
     public async getTelemetry(): Promise<{ vramUsageBytes: number; activeModel: string | null }> {

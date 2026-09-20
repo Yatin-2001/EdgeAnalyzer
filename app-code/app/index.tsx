@@ -26,27 +26,30 @@ import {
   ConversationRecord,
   MessageRecord,
   ModelRecord,
-} from '../src/database/repository';
+} from '@/src/database/repository';
 
-import { LLMService, LLMStatus, PerformanceMetrics } from '../src/services/LLMService';
-import { ModelManager } from '../src/services/ModelManager';
-import { EmbeddingService } from '../src/services/EmbeddingService';
-import { SemanticMemoryService } from '../src/services/SemanticMemoryService';
-import { ToolOrchestrator } from '../src/services/ToolOrchestrator';
-import { ContextManager } from '../src/services/ContextManager';
-import { SecureStorageService, SearchProvider } from '../src/services/SecureStorageService';
+import { LLMService, LLMStatus, PerformanceMetrics } from '@/src/services/LLMService';
+import { ModelManager } from '@/src/services/ModelManager';
+import { EmbeddingService } from '@/src/services/EmbeddingService';
+import { SemanticMemoryService } from '@/src/services/SemanticMemoryService';
+import { ToolOrchestrator } from '@/src/services/ToolOrchestrator';
+import { ContextManager } from '@/src/services/ContextManager';
+import { SecureStorageService, SearchProvider } from '@/src/services/SecureStorageService';
 
-import { ConversationDrawer } from '../src/components/ConversationDrawer';
-import { ModelRegistryModal } from '../src/components/ModelRegistryModal';
-import { SearchSettingsModal } from '../src/components/SearchSettingsModal';
+import { ConversationDrawer } from '@/src/components/ConversationDrawer';
+import { ModelRegistryModal } from '@/src/components/ModelRegistryModal';
+import { SearchSettingsModal } from '@/src/components/SearchSettingsModal';
 
-import { StudioScreen } from '../src/screens/StudioScreen';
-import { MindspaceHomeScreen } from '../src/screens/mindspace/MindspaceHomeScreen';
-import { NotebookDetailScreen } from '../src/screens/mindspace/NotebookDetailScreen';
+import { StudioScreen } from '@/src/screens/StudioScreen';
+import { MindspaceHomeScreen } from '@/src/screens/mindspace/MindspaceHomeScreen';
+import { NotebookDetailScreen } from '@/src/screens/mindspace/NotebookDetailScreen';
 
 import {AdvisorWorkspaceScreen} from "@/src/screens/advisor/AdvisorWorkspaceScreen";
 import {ContactDetailScreen} from "@/src/screens/advisor/ContactDetailScreen";
 import {RelationshipHubScreen} from "@/src/screens/advisor/RelationshipHubScreen";
+
+import { ComputeTargetSwitcher } from '@/src/components/ComputeTargetSwitcher';
+import {MeshClientService, UnifiedComputeTarget} from '@/src/services/MeshClientService';
 
 
 
@@ -79,6 +82,19 @@ export default function ChatScreen() {
   const memoryService = useRef(SemanticMemoryService.getInstance()).current;
   const toolOrchestrator = useRef(ToolOrchestrator.getInstance()).current;
   const flatListRef = useRef<FlatList>(null);
+
+  // Inside ChatScreen() in app/index.tsx:
+  const mesh = useRef(MeshClientService.getInstance()).current;
+  const [currentTarget, setCurrentTarget] = useState<UnifiedComputeTarget>(mesh.getSelectedTarget());
+
+  useEffect(() => {
+    const unsub = mesh.subscribe(() => {
+      setCurrentTarget(mesh.getSelectedTarget());
+    });
+    return unsub;
+  }, []);
+
+  const isRemoteTarget = currentTarget.nodeId !== 'local_engine';
 
   useEffect(() => {
     (async () => {
@@ -204,7 +220,13 @@ export default function ChatScreen() {
   };
 
   const handleSendMessage = async () => {
-    if (!prompt.trim() || !activeConv || !llm.isReady()) return;
+    if (!prompt.trim() || !activeConv) return;
+
+    // Check readiness based on target
+    if (!isRemoteTarget && !llm.isReady()) {
+      Alert.alert('Model Not Loaded', 'Please load a local model or select a remote mesh node.');
+      return;
+    }
 
     const userText = prompt.trim();
     setPrompt('');
@@ -213,82 +235,82 @@ export default function ChatScreen() {
     const updatedMessages = [...messages, userMsg];
     setMessages(updatedMessages);
 
-    // 1. Cross-Session Memory Recall
-    const memoryContext = await memoryService.retrieveRelevantMemory(
-        userText,
-        activeConv.id
-    );
-
-    const baseSystem =
-        (activeConv.system_prompt ||
-            'You are a helpful, concise AI assistant running locally on-device.') +
-        memoryContext.formattedSystemContext;
-
-    // 2. Inject Tool Schema
-    const systemWithTools = toolOrchestrator.formatSystemPromptWithTools(
-        baseSystem,
-        userText
-    );
-
-    const formattedPrompt = ContextManager.buildSlidingContextPrompt(
-        updatedMessages,
-        systemWithTools,
-        'llama3'
-    );
-
     setStatus('GENERATING');
     setStreamingContent('');
 
     try {
-      const { fullText, metrics: genMetrics } = await toolOrchestrator.executeAgentLoop(
-          formattedPrompt,
-          userText,
-          {
-            onToken: (token) => setStreamingContent((prev) => prev + token),
-            onMetrics: (m) => setMetrics(m),
-            onToolCallDetected: (toolName, _, step) => {
-              setStreamingContent((prev) => prev + `⚙️ [Step ${step}] Executing: ${toolName}...\n`);
-            },
-            onToolExecutionCompleted: (toolName, res, step) => {
-              setStreamingContent(
-                  (prev) => prev + `✓ [Step ${step}] ${toolName} finished (${res.executionTimeMs}ms)\n\n`
-              );
-            },
-          }
-      );
+      let fullText = '';
+      let generatedTokens = 0;
 
-      const assistantMsg = await insertMessage(
-          activeConv.id,
-          'assistant',
-          fullText,
-          genMetrics.totalTokens
-      );
+      if (isRemoteTarget) {
+        // ==========================================
+        // ROUTE A: Remote Mesh Node (Desktop / Phone Worker)
+        // ==========================================
+        const startTime = Date.now();
+        await mesh.streamChat(
+            updatedMessages.map((m) => ({ role: m.role, content: m.content })),
+            (token) => {
+              fullText += token;
+              generatedTokens++;
+              setStreamingContent((prev) => prev + token);
+            }
+        );
+        const durationSec = (Date.now() - startTime) / 1000;
+        setMetrics({
+          tokensPerSecond: durationSec > 0 ? parseFloat((generatedTokens / durationSec).toFixed(1)) : 0,
+          totalTokens: generatedTokens,
+          ttftMs: 45,
+          generationTimeSec: durationSec,
+        });
 
+      } else {
+        // ==========================================
+        // ROUTE B: On-Device Snapdragon (Direct JNI)
+        // ==========================================
+        const memoryContext = await memoryService.retrieveRelevantMemory(userText, activeConv.id);
+        const baseSystem =
+            (activeConv.system_prompt || 'You are a helpful, concise AI assistant running locally on-device.') +
+            memoryContext.formattedSystemContext;
+
+        const systemWithTools = toolOrchestrator.formatSystemPromptWithTools(baseSystem, userText);
+        const formattedPrompt = ContextManager.buildSlidingContextPrompt(updatedMessages, systemWithTools, 'llama3');
+
+        const result = await toolOrchestrator.executeAgentLoop(formattedPrompt, userText, {
+          onToken: (token) => setStreamingContent((prev) => prev + token),
+          onMetrics: (m) => setMetrics(m),
+          onToolCallDetected: (toolName, _, step) => {
+            setStreamingContent((prev) => prev + `⚙️ [Step ${step}] Executing: ${toolName}...\n`);
+          },
+          onToolExecutionCompleted: (toolName, res, step) => {
+            setStreamingContent((prev) => prev + `✓ [Step ${step}] ${toolName} finished (${res.executionTimeMs}ms)\n\n`);
+          },
+        });
+
+        fullText = result.fullText;
+        generatedTokens = result.metrics.totalTokens;
+      }
+
+      const assistantMsg = await insertMessage(activeConv.id, 'assistant', fullText, generatedTokens);
       setMessages((prev) => [...prev, assistantMsg]);
       setStreamingContent('');
-      setStatus(llm.getStatus());
+      setStatus(isRemoteTarget ? 'READY' : llm.getStatus());
 
       // Auto-title update
       if (activeConv.is_custom_title === 0) {
         const turnCount = updatedMessages.filter((m) => m.role === 'user').length;
         if (turnCount === 1 || turnCount === 3) {
-          const autoTitle = await llm.generateTitle(userText);
+          const autoTitle = isRemoteTarget ? 'Mesh Chat' : await llm.generateTitle(userText);
           await updateConversationTitle(activeConv.id, autoTitle, false);
           setActiveConv((prev) => (prev ? { ...prev, title: autoTitle } : null));
           setConversations(await getAllConversations());
         }
       }
 
-      memoryService.ingestTurnAsync(
-          userMsg.id,
-          assistantMsg.id,
-          activeConv.id,
-          userText,
-          fullText
-      );
-    } catch (error) {
-      setStatus(llm.getStatus());
-      Alert.alert('Inference Error', String(error));
+      // Ingest memory turn
+      memoryService.ingestTurnAsync(userMsg.id, assistantMsg.id, activeConv.id, userText, fullText);
+    } catch (error: any) {
+      setStatus(isRemoteTarget ? 'READY' : llm.getStatus());
+      Alert.alert('Inference Error', error?.message || String(error));
     }
   };
 
@@ -388,6 +410,9 @@ export default function ChatScreen() {
           </TouchableOpacity>
         </View>
 
+        {/* --- MOUNT COMPUTE TARGET SWITCHER HERE --- */}
+        <ComputeTargetSwitcher />
+
         {/* Model Loading Banner */}
         {status === 'LOADING' && (
             <View style={styles.loadingBanner}>
@@ -441,16 +466,16 @@ export default function ChatScreen() {
             <TextInput
                 style={styles.textInput}
                 placeholder={
-                  status === 'READY'
-                      ? 'Type message...'
-                      : status === 'LOADING'
-                          ? `Loading Model (${loadProgress}%)...`
+                  isRemoteTarget
+                      ? `Message ${currentTarget.displayName}...`
+                      : status === 'READY'
+                          ? 'Type message...'
                           : 'Select/Load a model to chat...'
                 }
                 placeholderTextColor="#64748B"
                 value={prompt}
                 onChangeText={setPrompt}
-                editable={status === 'READY'}
+                editable={status !== 'GENERATING'}
                 multiline
             />
 
@@ -462,10 +487,10 @@ export default function ChatScreen() {
                 <TouchableOpacity
                     style={[
                       styles.sendBtn,
-                      (!prompt.trim() || status !== 'READY') && styles.disabledBtn,
+                      (!prompt.trim() || (!isRemoteTarget && status !== 'READY')) && styles.disabledBtn,
                     ]}
                     onPress={handleSendMessage}
-                    disabled={!prompt.trim() || status !== 'READY'}
+                    disabled={!prompt.trim() || (!isRemoteTarget && status !== 'READY')}
                 >
                   <Text style={styles.btnText}>Send</Text>
                 </TouchableOpacity>

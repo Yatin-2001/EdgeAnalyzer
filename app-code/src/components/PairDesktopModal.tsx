@@ -9,24 +9,12 @@ import {
     ActivityIndicator,
     Alert,
 } from 'react-native';
-import * as SecureStore from 'expo-secure-store';
-import MeshClientService from '../services/MeshClientService';
+import { MeshClientService } from '../services/MeshClientService';
 
 interface Props {
     visible: boolean;
     onClose: () => void;
     onPairSuccess: () => void;
-}
-
-// Persistent device identifier without requiring expo-application
-async function getOrCreateDeviceId(): Promise<string> {
-    const KEY = 'mesh_persistent_device_id';
-    let deviceId = await SecureStore.getItemAsync(KEY);
-    if (!deviceId) {
-        deviceId = `dev_mobile_${Date.now().toString(36)}_${Math.random().toString(36).substring(2, 7)}`;
-        await SecureStore.setItemAsync(KEY, deviceId);
-    }
-    return deviceId;
 }
 
 export const PairDesktopModal: React.FC<Props> = ({
@@ -48,15 +36,11 @@ export const PairDesktopModal: React.FC<Props> = ({
         setIsPairing(true);
         try {
             const meshService = MeshClientService.getInstance();
-            const deviceId = await getOrCreateDeviceId();
-            const deviceName = 'OnePlus 15';
 
-            await meshService.pairWithDesktop(
+            await meshService.pairWithNode(
                 desktopIp.trim(),
                 parseInt(port.trim(), 10) || 8080,
-                pin.trim().replace('-', ''),
-                deviceId,
-                deviceName
+                pin.trim().replace('-', '')
             );
 
             Alert.alert('Paired Successfully', 'Connected to Desktop RTX 3060 compute node.');
@@ -70,7 +54,7 @@ export const PairDesktopModal: React.FC<Props> = ({
     };
 
     return (
-        <Modal visible={visible} animationType="fade" transparent>
+        <Modal visible={visible} animationType="fade" transparent onRequestClose={onClose}>
             <View style={styles.overlay}>
                 <View style={styles.modalCard}>
                     <Text style={styles.title}>💻 Pair Desktop Node</Text>

@@ -1,96 +1,103 @@
 import React, { useState, useEffect } from 'react';
 import { View, Text, TouchableOpacity, StyleSheet } from 'react-native';
-import { MeshConnectionStatus, HeartbeatTelemetry } from '../services/MeshClientService';
-import MeshClientService from '../services/MeshClientService';
+import {
+    MeshClientService,
+    MeshNodeEndpoint,
+    UnifiedComputeTarget,
+} from '../services/MeshClientService';
+import { UniversalNodePickerModal } from './UniversalNodePickerModal';
 
-export type ComputeTarget = 'desktop' | 'local';
-
-interface Props {
-    selectedTarget: ComputeTarget;
-    onTargetChange: (target: ComputeTarget) => void;
-}
-
-export const ComputeTargetSwitcher: React.FC<Props> = ({ selectedTarget, onTargetChange }) => {
-    const [meshStatus, setMeshStatus] = useState<MeshConnectionStatus>('DISCONNECTED');
-    const [telemetry, setTelemetry] = useState<HeartbeatTelemetry | null>(null);
+export const ComputeTargetSwitcher: React.FC = () => {
+    const mesh = MeshClientService.getInstance();
+    const [selectedTarget, setSelectedTarget] = useState<UnifiedComputeTarget>(
+        mesh.getSelectedTarget()
+    );
+    const [nodes, setNodes] = useState<MeshNodeEndpoint[]>([]);
+    const [isModalOpen, setIsModalOpen] = useState(false);
 
     useEffect(() => {
-        const mesh = MeshClientService.getInstance();
-        const unsub = mesh.subscribe((status, tel) => {
-            setMeshStatus(status);
-            if (tel) setTelemetry(tel);
+        // Initial scan of known peers
+        mesh.scanAndSyncPeers();
+
+        const unsub = mesh.subscribe(() => {
+            setSelectedTarget(mesh.getSelectedTarget());
+            setNodes(mesh.getActiveNodes());
         });
-        return unsub;
+
+        // Periodic network probe every 10 seconds
+        const interval = setInterval(() => mesh.scanAndSyncPeers(), 10000);
+
+        return () => {
+            unsub();
+            clearInterval(interval);
+        };
     }, []);
 
     return (
         <View style={styles.container}>
             <TouchableOpacity
-                style={[styles.tab, selectedTarget === 'desktop' && styles.tabActive]}
-                onPress={() => onTargetChange('desktop')}
-                disabled={meshStatus === 'OFFLINE' || meshStatus === 'DISCONNECTED'}
+                style={styles.triggerButton}
+                onPress={() => setIsModalOpen(true)}
+                activeOpacity={0.8}
             >
-                <View style={styles.row}>
-                    <Text style={[styles.tabText, selectedTarget === 'desktop' && styles.tabTextActive]}>
-                        💻 Desktop: RTX 3060
+                <View style={styles.labelRow}>
+                    <Text style={styles.prefixText}>COMPUTE TARGET:</Text>
+                    <Text style={styles.targetName} numberOfLines={1}>
+                        {selectedTarget.displayName}
                     </Text>
-                    <View
-                        style={[
-                            styles.statusDot,
-                            meshStatus === 'ONLINE'
-                                ? styles.dotOnline
-                                : meshStatus === 'DEGRADED'
-                                    ? styles.dotDegraded
-                                    : styles.dotOffline,
-                        ]}
-                    />
                 </View>
-                {telemetry && meshStatus === 'ONLINE' && (
-                    <Text style={styles.subText}>{telemetry.latencyMs}ms • {telemetry.activeModel || 'Idle'}</Text>
-                )}
+                <Text style={styles.arrowIcon}>▾</Text>
             </TouchableOpacity>
 
-            <TouchableOpacity
-                style={[styles.tab, selectedTarget === 'local' && styles.tabActive]}
-                onPress={() => onTargetChange('local')}
-            >
-                <Text style={[styles.tabText, selectedTarget === 'local' && styles.tabTextActive]}>
-                    📱 Local: Snapdragon 8 Elite
-                </Text>
-                <Text style={styles.subText}>Llama 3.2 1B (On-Device)</Text>
-            </TouchableOpacity>
+            <UniversalNodePickerModal
+                visible={isModalOpen}
+                nodes={nodes}
+                selectedTarget={selectedTarget}
+                onSelectTarget={(target) => mesh.setSelectedTarget(target)}
+                onClose={() => setIsModalOpen(false)}
+            />
         </View>
     );
 };
 
 const styles = StyleSheet.create({
     container: {
-        flexDirection: 'row',
-        backgroundColor: '#0F172A',
-        borderRadius: 8,
-        padding: 3,
         marginHorizontal: 12,
-        marginVertical: 6,
+        marginVertical: 4,
     },
-    tab: {
-        flex: 1,
-        paddingVertical: 6,
-        paddingHorizontal: 8,
-        borderRadius: 6,
+    triggerButton: {
+        flexDirection: 'row',
         alignItems: 'center',
-        justifyContent: 'center',
-    },
-    tabActive: {
+        justifyContent: 'space-between',
         backgroundColor: '#1E293B',
+        paddingHorizontal: 12,
+        paddingVertical: 7,
+        borderRadius: 8,
         borderWidth: 1,
-        borderColor: '#38BDF8',
+        borderColor: '#334155',
     },
-    row: { flexDirection: 'row', alignItems: 'center', gap: 6 },
-    tabText: { color: '#64748B', fontSize: 11, fontWeight: '600' },
-    tabTextActive: { color: '#F8FAFC', fontWeight: '700' },
-    subText: { color: '#94A3B8', fontSize: 9, marginTop: 1 },
-    statusDot: { width: 6, height: 6, borderRadius: 3 },
-    dotOnline: { backgroundColor: '#10B981' },
-    dotDegraded: { backgroundColor: '#F59E0B' },
-    dotOffline: { backgroundColor: '#EF4444' },
+    labelRow: {
+        flexDirection: 'row',
+        alignItems: 'center',
+        gap: 6,
+        flex: 1,
+    },
+    prefixText: {
+        color: '#64748B',
+        fontSize: 10,
+        fontWeight: '700',
+        letterSpacing: 0.6,
+    },
+    targetName: {
+        color: '#38BDF8',
+        fontSize: 12,
+        fontWeight: '700',
+        flexShrink: 1,
+    },
+    arrowIcon: {
+        color: '#94A3B8',
+        fontSize: 14,
+        fontWeight: '700',
+        marginLeft: 6,
+    },
 });

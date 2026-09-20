@@ -1,7 +1,9 @@
 package expo.modules.modelfile
 
 import android.content.Context
+import android.content.Intent
 import android.net.Uri
+import android.os.Build
 import android.provider.OpenableColumns
 import expo.modules.kotlin.modules.Module
 import expo.modules.kotlin.modules.ModuleDefinition
@@ -16,29 +18,20 @@ class ModelFileModule : Module() {
          * Copies a content:// URI exposed by Android's document picker
          * into an app-private file:// destination.
          */
-        AsyncFunction("copyContentUriToFile") {
-                sourceUri: String,
-                destinationPath: String ->
-
+        AsyncFunction("copyContentUriToFile") { sourceUri: String, destinationPath: String ->
             val context: Context =
                 requireNotNull(appContext.reactContext) {
                     "React context is not available."
                 }
 
             val uri = Uri.parse(sourceUri)
-
             if (uri.scheme != "content") {
-                throw IllegalArgumentException(
-                    "Expected a content:// URI, got: $sourceUri"
-                )
+                throw IllegalArgumentException("Expected a content:// URI, got: $sourceUri")
             }
 
             val destinationUri = Uri.parse(destinationPath)
-
             if (destinationUri.scheme != "file") {
-                throw IllegalArgumentException(
-                    "Expected a file:// destination URI, got: $destinationPath"
-                )
+                throw IllegalArgumentException("Expected a file:// destination URI, got: $destinationPath")
             }
 
             val destination = File(
@@ -50,36 +43,23 @@ class ModelFileModule : Module() {
             destination.parentFile?.mkdirs()
 
             val resolver = context.contentResolver
-
             val inputStream = resolver.openInputStream(uri)
-                ?: throw IllegalStateException(
-                    "Unable to open content URI: $sourceUri"
-                )
+                ?: throw IllegalStateException("Unable to open content URI: $sourceUri")
 
             inputStream.use { input ->
-
                 destination.outputStream().use { output ->
-
                     val buffer = ByteArray(1024 * 1024)
-
                     while (true) {
                         val bytesRead = input.read(buffer)
-
-                        if (bytesRead == -1) {
-                            break
-                        }
-
+                        if (bytesRead == -1) break
                         output.write(buffer, 0, bytesRead)
                     }
-
                     output.flush()
                 }
             }
 
             if (!destination.exists()) {
-                throw IllegalStateException(
-                    "Destination file was not created: ${destination.absolutePath}"
-                )
+                throw IllegalStateException("Destination file was not created: ${destination.absolutePath}")
             }
 
             destination.absolutePath
@@ -88,28 +68,16 @@ class ModelFileModule : Module() {
         /**
          * Retrieves metadata for a model selected through Android's
          * Storage Access Framework.
-         *
-         * Example:
-         *
-         * content://com.android.providers.downloads.documents/document/msf%3A18903
-         *
-         * Returns the actual filename rather than the opaque document ID.
          */
         AsyncFunction("getContentUriMetadata") { uriString: String ->
-
             val uri = Uri.parse(uriString)
-
             if (uri.scheme != "content") {
-                throw IllegalArgumentException(
-                    "Expected a content:// URI, got: $uriString"
-                )
+                throw IllegalArgumentException("Expected a content:// URI, got: $uriString")
             }
 
             val resolver =
                 appContext.reactContext?.contentResolver
-                    ?: throw IllegalStateException(
-                        "ContentResolver is unavailable"
-                    )
+                    ?: throw IllegalStateException("ContentResolver is unavailable")
 
             var displayName: String? = null
             var sizeBytes: Long? = null
@@ -124,19 +92,13 @@ class ModelFileModule : Module() {
                 null,
                 null
             )?.use { cursor ->
-
                 if (cursor.moveToFirst()) {
-
-                    val nameIndex =
-                        cursor.getColumnIndex(OpenableColumns.DISPLAY_NAME)
-
+                    val nameIndex = cursor.getColumnIndex(OpenableColumns.DISPLAY_NAME)
                     if (nameIndex >= 0 && !cursor.isNull(nameIndex)) {
                         displayName = cursor.getString(nameIndex)
                     }
 
-                    val sizeIndex =
-                        cursor.getColumnIndex(OpenableColumns.SIZE)
-
+                    val sizeIndex = cursor.getColumnIndex(OpenableColumns.SIZE)
                     if (sizeIndex >= 0 && !cursor.isNull(sizeIndex)) {
                         sizeBytes = cursor.getLong(sizeIndex)
                     }
@@ -144,9 +106,7 @@ class ModelFileModule : Module() {
             }
 
             if (displayName.isNullOrBlank()) {
-                throw IllegalStateException(
-                    "Unable to determine the original filename from the selected model."
-                )
+                throw IllegalStateException("Unable to determine the original filename from the selected model.")
             }
 
             mapOf(
@@ -155,28 +115,21 @@ class ModelFileModule : Module() {
             )
         }
 
-        // Get GGUF-extension bytes
+        /**
+         * Checks GGUF magic header bytes (0x47 0x47 0x55 0x46).
+         */
         AsyncFunction("isGGUFFile") { fileUriString: String ->
-
             val fileUri = Uri.parse(fileUriString)
-
             if (fileUri.scheme != "file") {
-                throw IllegalArgumentException(
-                    "Expected a file:// URI, got: $fileUriString"
-                )
+                throw IllegalArgumentException("Expected a file:// URI, got: $fileUriString")
             }
 
             val filePath = fileUri.path
-                ?: throw IllegalArgumentException(
-                    "Could not resolve file path: $fileUriString"
-                )
+                ?: throw IllegalArgumentException("Could not resolve file path: $fileUriString")
 
             val file = File(filePath)
-
             if (!file.exists()) {
-                throw IllegalArgumentException(
-                    "File does not exist: $filePath"
-                )
+                throw IllegalArgumentException("File does not exist: $filePath")
             }
 
             if (file.length() < 4) {
@@ -184,11 +137,8 @@ class ModelFileModule : Module() {
             }
 
             file.inputStream().use { input ->
-
                 val header = ByteArray(4)
-
                 val bytesRead = input.read(header)
-
                 if (bytesRead != 4) {
                     return@AsyncFunction false
                 }
@@ -200,6 +150,34 @@ class ModelFileModule : Module() {
                                 header[3] == 0x46.toByte()    // F
                         )
             }
+        }
+
+        /**
+         * Starts the background foreground service on port 8082.
+         */
+        AsyncFunction("startWorkerService") {
+            val context: Context = appContext.reactContext ?: return@AsyncFunction false
+            val intent = Intent(context, EdgeComputeWorkerService::class.java).apply {
+                action = EdgeComputeWorkerService.ACTION_START
+            }
+            if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
+                context.startForegroundService(intent)
+            } else {
+                context.startService(intent)
+            }
+            return@AsyncFunction true
+        }
+
+        /**
+         * Stops the background compute service and releases wake/wifi locks.
+         */
+        AsyncFunction("stopWorkerService") {
+            val context: Context = appContext.reactContext ?: return@AsyncFunction false
+            val intent = Intent(context, EdgeComputeWorkerService::class.java).apply {
+                action = EdgeComputeWorkerService.ACTION_STOP
+            }
+            context.startService(intent)
+            return@AsyncFunction true
         }
     }
 }

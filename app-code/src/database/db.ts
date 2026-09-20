@@ -1,18 +1,16 @@
 import * as SQLite from 'expo-sqlite';
 
-let dbInstance: SQLite.SQLiteDatabase | null = null;
+let dbPromise: Promise<SQLite.SQLiteDatabase> | null = null;
 
-export async function getDatabase(): Promise<SQLite.SQLiteDatabase> {
-  if (dbInstance) return dbInstance;
+async function initDatabase(): Promise<SQLite.SQLiteDatabase> {
+  const db = await SQLite.openDatabaseAsync('edge_analyzer.db');
 
-  dbInstance = await SQLite.openDatabaseAsync('edge_analyzer.db');
-
-  // Enable Write-Ahead Logging (WAL) for faster concurrent access
-  await dbInstance.execAsync('PRAGMA journal_mode = WAL;');
-  await dbInstance.execAsync('PRAGMA foreign_keys = ON;');
+  // Enable Write-Ahead Logging (WAL) and foreign keys
+  await db.execAsync('PRAGMA journal_mode = WAL;');
+  await db.execAsync('PRAGMA foreign_keys = ON;');
 
   // Core & MVP-1.0 Tables
-  await dbInstance.execAsync(`
+  await db.execAsync(`
     CREATE TABLE IF NOT EXISTS models (
       id TEXT PRIMARY KEY,
       original_name TEXT NOT NULL,
@@ -74,8 +72,8 @@ export async function getDatabase(): Promise<SQLite.SQLiteDatabase> {
     );
   `);
 
-  // MindSpace Multimodal Notebook Tables (MVP 2.0)
-  await dbInstance.execAsync(`
+  // MindSpace Multimodal Notebook Tables (MVP 2.0) & Distributed Mesh (MVP 3.0)
+  await db.execAsync(`
     CREATE TABLE IF NOT EXISTS notebooks (
       id TEXT PRIMARY KEY,
       title TEXT NOT NULL,
@@ -136,50 +134,83 @@ export async function getDatabase(): Promise<SQLite.SQLiteDatabase> {
     );
 
     CREATE VIRTUAL TABLE IF NOT EXISTS asset_chunks_fts USING fts5(
-        chunk_id UNINDEXED,
-        notebook_id UNINDEXED,
-        asset_id UNINDEXED,
-        chunk_text
-      );
+      chunk_id UNINDEXED,
+      notebook_id UNINDEXED,
+      asset_id UNINDEXED,
+      chunk_text
+    );
 
     CREATE TABLE IF NOT EXISTS contacts (
-        id TEXT PRIMARY KEY,
-        name TEXT NOT NULL,
-        platform_handle TEXT,
-        default_platform TEXT NOT NULL,
-        relationship_type TEXT NOT NULL,
-        communication_style TEXT,
-        profile_summary TEXT,
-        avatar_color TEXT DEFAULT '#8B5CF6',
-        created_at INTEGER NOT NULL,
-        updated_at INTEGER NOT NULL
+      id TEXT PRIMARY KEY,
+      name TEXT NOT NULL,
+      platform_handle TEXT,
+      default_platform TEXT NOT NULL,
+      relationship_type TEXT NOT NULL,
+      communication_style TEXT,
+      profile_summary TEXT,
+      avatar_color TEXT DEFAULT '#8B5CF6',
+      created_at INTEGER NOT NULL,
+      updated_at INTEGER NOT NULL
     );
 
     CREATE TABLE IF NOT EXISTS contact_interactions (
-        id TEXT PRIMARY KEY,
-        contact_id TEXT,
-        source_type TEXT NOT NULL,
-        screenshot_uri TEXT,
-        raw_transcript TEXT NOT NULL,
-        situation_summary TEXT,
-        detected_sentiment TEXT,
-        user_intent TEXT,
-        selected_reply TEXT,
-        custom_reply_feedback TEXT,
-        created_at INTEGER NOT NULL,
-        FOREIGN KEY (contact_id) REFERENCES contacts(id) ON DELETE CASCADE
+      id TEXT PRIMARY KEY,
+      contact_id TEXT,
+      source_type TEXT NOT NULL,
+      screenshot_uri TEXT,
+      raw_transcript TEXT NOT NULL,
+      situation_summary TEXT,
+      detected_sentiment TEXT,
+      user_intent TEXT,
+      selected_reply TEXT,
+      custom_reply_feedback TEXT,
+      created_at INTEGER NOT NULL,
+      FOREIGN KEY (contact_id) REFERENCES contacts(id) ON DELETE CASCADE
     );
 
     CREATE TABLE IF NOT EXISTS contact_facts (
-        id TEXT PRIMARY KEY,
-        contact_id TEXT NOT NULL,
-        fact_text TEXT NOT NULL,
-        embedding BLOB NOT NULL,
-        created_at INTEGER NOT NULL,
-        FOREIGN KEY (contact_id) REFERENCES contacts(id) ON DELETE CASCADE
+      id TEXT PRIMARY KEY,
+      contact_id TEXT NOT NULL,
+      fact_text TEXT NOT NULL,
+      embedding BLOB NOT NULL,
+      created_at INTEGER NOT NULL,
+      FOREIGN KEY (contact_id) REFERENCES contacts(id) ON DELETE CASCADE
     );
-           
+
+    CREATE TABLE IF NOT EXISTS mesh_node_config (
+      node_id TEXT PRIMARY KEY,
+      node_name TEXT NOT NULL,
+      node_tier TEXT NOT NULL,
+      is_worker_enabled INTEGER DEFAULT 0,
+      cluster_secret TEXT,
+      created_at INTEGER NOT NULL,
+      updated_at INTEGER NOT NULL
+    );
+
+    CREATE TABLE IF NOT EXISTS mesh_peers (
+      node_id TEXT PRIMARY KEY,
+      node_name TEXT NOT NULL,
+      device_tier TEXT NOT NULL,
+      shared_token TEXT NOT NULL,
+      last_known_ip TEXT NOT NULL,
+      last_known_port INTEGER NOT NULL,
+      is_trusted INTEGER DEFAULT 1,
+      capabilities_json TEXT,
+      created_at INTEGER NOT NULL,
+      updated_at INTEGER NOT NULL
+    );
   `);
 
-  return dbInstance;
+  return db;
+}
+
+export function getDatabase(): Promise<SQLite.SQLiteDatabase> {
+  if (!dbPromise) {
+    dbPromise = initDatabase().catch((err) => {
+      // Reset promise if init failed so subsequent calls can retry
+      dbPromise = null;
+      throw err;
+    });
+  }
+  return dbPromise;
 }

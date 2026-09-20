@@ -166,6 +166,36 @@ export interface NotebookMessageRecord {
   created_at: number;
 }
 
+
+// ----------------------------------------------------
+// Distributed Mesh P2P Types & Models
+// ----------------------------------------------------
+export type DeviceTier = 'thin' | 'thick_mobile' | 'thick_desktop';
+
+export interface MeshNodeConfigRecord {
+  node_id: string;
+  node_name: string;
+  node_tier: DeviceTier;
+  is_worker_enabled: number; // 0 or 1
+  cluster_secret: string | null;
+  created_at: number;
+  updated_at: number;
+}
+
+export interface MeshPeerRecord {
+  node_id: string;
+  node_name: string;
+  device_tier: DeviceTier;
+  shared_token: string;
+  last_known_ip: string;
+  last_known_port: number;
+  is_trusted: number; // 0 or 1
+  capabilities_json: string | null;
+  created_at: number;
+  updated_at: number;
+}
+
+
 // ----------------------------------------------------
 // Vector & UUID Helpers
 // ----------------------------------------------------
@@ -1049,4 +1079,95 @@ export async function getContactFacts(contactId: string): Promise<ContactFactRec
         'SELECT * FROM contact_facts WHERE contact_id = ? ORDER BY created_at DESC;',
         [contactId]
     );
+}
+
+
+// ----------------------------------------------------
+// Node Config Operations
+// ----------------------------------------------------
+export async function getMeshNodeConfig(): Promise<MeshNodeConfigRecord | null> {
+  try {
+    const db = await getDatabase();
+    return await db.getFirstAsync<MeshNodeConfigRecord>('SELECT * FROM mesh_node_config LIMIT 1;');
+  } catch (err) {
+    console.warn('[Repository] getMeshNodeConfig failed:', err);
+    return null;
+  }
+}
+
+export async function upsertMeshNodeConfig(
+    nodeId: string,
+    nodeName: string,
+    nodeTier: DeviceTier,
+    isWorkerEnabled: boolean,
+    clusterSecret: string | null
+): Promise<void> {
+  const db = await getDatabase();
+  const now = Date.now();
+  await db.runAsync(
+      `INSERT INTO mesh_node_config (node_id, node_name, node_tier, is_worker_enabled, cluster_secret, created_at, updated_at)
+     VALUES (?, ?, ?, ?, ?, ?, ?)
+     ON CONFLICT(node_id) DO UPDATE SET
+       node_name = excluded.node_name,
+       node_tier = excluded.node_tier,
+       is_worker_enabled = excluded.is_worker_enabled,
+       cluster_secret = excluded.cluster_secret,
+       updated_at = excluded.updated_at;`,
+      [nodeId, nodeName, nodeTier, isWorkerEnabled ? 1 : 0, clusterSecret ?? null, now, now]
+  );
+}
+
+// ----------------------------------------------------
+// Peer Registry Operations
+// ----------------------------------------------------
+export async function getAllTrustedPeers(): Promise<MeshPeerRecord[]> {
+  try {
+    const db = await getDatabase();
+    return await db.getAllAsync<MeshPeerRecord>(
+        'SELECT * FROM mesh_peers WHERE is_trusted = 1 ORDER BY updated_at DESC;'
+    );
+  } catch (err) {
+    console.warn('[Repository] getAllTrustedPeers failed:', err);
+    return [];
+  }
+}
+
+export async function getMeshPeerById(nodeId: string): Promise<MeshPeerRecord | null> {
+  try {
+    const db = await getDatabase();
+    return await db.getFirstAsync<MeshPeerRecord>(
+        'SELECT * FROM mesh_peers WHERE node_id = ? LIMIT 1;',
+        [nodeId]
+    );
+  } catch (err) {
+    console.warn('[Repository] getMeshPeerById failed:', err);
+    return null;
+  }
+}
+
+export async function upsertMeshPeer(
+    nodeId: string,
+    nodeName: string,
+    deviceTier: DeviceTier,
+    sharedToken: string,
+    ip: string,
+    port: number,
+    capabilitiesJson: string | null = null
+): Promise<void> {
+  const db = await getDatabase();
+  const now = Date.now();
+  await db.runAsync(
+      `INSERT INTO mesh_peers (node_id, node_name, device_tier, shared_token, last_known_ip, last_known_port, is_trusted, capabilities_json, created_at, updated_at)
+     VALUES (?, ?, ?, ?, ?, ?, 1, ?, ?, ?)
+     ON CONFLICT(node_id) DO UPDATE SET
+       node_name = excluded.node_name,
+       device_tier = excluded.device_tier,
+       shared_token = excluded.shared_token,
+       last_known_ip = excluded.last_known_ip,
+       last_known_port = excluded.last_known_port,
+       is_trusted = 1,
+       capabilities_json = excluded.capabilities_json,
+       updated_at = excluded.updated_at;`,
+      [nodeId, nodeName, deviceTier, sharedToken, ip, port, capabilitiesJson ?? null, now, now]
+  );
 }
