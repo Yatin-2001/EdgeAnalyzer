@@ -47,7 +47,6 @@
     "cf.first.check.clang-format": "false",
     "cidr.known.project.marker": "true",
     "codeWithMe.voiceChat.enabledByDefault": "false",
-    "git-widget-placeholder": "version-3",
     "ignore.virus.scanning.warn.message": "true",
     "javascript.preferred.runtime.type.id": "node",
     "kotlin-language-version-configured": "true",
@@ -99,6 +98,7 @@
       <workItem from="1789566020835" duration="716000" />
       <workItem from="1789566751580" duration="1252000" />
       <workItem from="1789874692930" duration="5519000" />
+      <workItem from="1790514839875" duration="382000" />
     </task>
     <servers />
   </component>
