@@ -1,4 +1,4 @@
-import React from 'react';
+import React, { useState, useEffect } from 'react';
 import {
     View,
     Text,
@@ -11,6 +11,7 @@ import {
     MeshNodeEndpoint,
     UnifiedComputeTarget,
 } from '../services/MeshClientService';
+import { MeshIdentityService } from '../services/MeshIdentityService';
 
 interface Props {
     visible: boolean;
@@ -27,6 +28,22 @@ export const UniversalNodePickerModal: React.FC<Props> = ({
                                                               onSelectTarget,
                                                               onClose,
                                                           }) => {
+    const [localNodeName, setLocalNodeName] = useState('This Device');
+    const [localTier, setLocalTier] = useState<string>('thick_mobile');
+
+    useEffect(() => {
+        (async () => {
+            const identity = await MeshIdentityService.getInstance().getOrCreateIdentity();
+            setLocalNodeName(identity.node_name);
+            setLocalTier(identity.node_tier);
+        })();
+    }, [visible]);
+
+    // Only compute provider nodes (Desktops and Mobile Workers) can be selected as inference targets
+    const computeProviderNodes = nodes.filter(
+        (n) => n.deviceTier === 'thick_desktop' || n.deviceTier === 'thick_mobile'
+    );
+
     return (
         <Modal visible={visible} animationType="fade" transparent onRequestClose={onClose}>
             <View style={styles.overlay}>
@@ -39,46 +56,54 @@ export const UniversalNodePickerModal: React.FC<Props> = ({
                     </View>
 
                     <ScrollView style={styles.scrollArea}>
-                        {/* 1. Local Snapdragon Target */}
+                        {/* 1. This Device Target */}
                         <Text style={styles.categoryTitle}>THIS DEVICE</Text>
                         <TouchableOpacity
                             style={[
                                 styles.itemCard,
                                 selectedTarget.nodeId === 'local_engine' && styles.itemCardActive,
+                                localTier === 'thin' && styles.disabledCard,
                             ]}
+                            disabled={localTier === 'thin'}
                             onPress={() => {
                                 onSelectTarget({
                                     nodeId: 'local_engine',
                                     modelName: 'Local GGUF',
-                                    displayName: '📱 Local: Snapdragon (Adreno)',
-                                    deviceTier: 'thick_mobile',
+                                    displayName: `📱 Local: ${localNodeName}`,
+                                    deviceTier: localTier as any,
                                 });
                                 onClose();
                             }}
                         >
                             <View style={{ flex: 1 }}>
-                                <Text style={styles.itemName}>📱 On-Device (Direct JNI)</Text>
-                                <Text style={styles.itemMeta}>Snapdragon 8 Elite • Offline Inference</Text>
+                                <Text style={styles.itemName}>
+                                    📱 {localNodeName} {localTier === 'thin' ? '(Thin Client)' : '(Direct JNI)'}
+                                </Text>
+                                <Text style={styles.itemMeta}>
+                                    {localTier === 'thin'
+                                        ? 'No local model loaded • Select a mesh node below'
+                                        : 'Hardware Accelerated • Offline Inference'}
+                                </Text>
                             </View>
-                            {selectedTarget.nodeId === 'local_engine' && (
+                            {selectedTarget.nodeId === 'local_engine' && localTier !== 'thin' && (
                                 <Text style={styles.checkmark}>✓</Text>
                             )}
                         </TouchableOpacity>
 
-                        {/* 2. Discovered Mesh Peers */}
+                        {/* 2. Discovered Mesh Compute Nodes */}
                         <Text style={[styles.categoryTitle, { marginTop: 14 }]}>
-                            MESH NODES (LOCAL SUBNET)
+                            MESH COMPUTE PROVIDERS (LOCAL SUBNET)
                         </Text>
 
-                        {nodes.length === 0 ? (
+                        {computeProviderNodes.length === 0 ? (
                             <View style={styles.emptyWrap}>
                                 <Text style={styles.emptyText}>No other compute nodes active.</Text>
                                 <Text style={styles.emptySub}>
-                                    Start your desktop daemon or enable Mobile Compute Worker on another phone.
+                                    Start your Desktop Daemon or enable Mobile Worker on your phone.
                                 </Text>
                             </View>
                         ) : (
-                            nodes.map((node) => {
+                            computeProviderNodes.map((node) => {
                                 const icon = node.deviceTier === 'thick_desktop' ? '💻' : '📱';
                                 return (
                                     <View key={node.nodeId} style={styles.nodeBlock}>
@@ -99,7 +124,7 @@ export const UniversalNodePickerModal: React.FC<Props> = ({
                                             </View>
                                         </View>
 
-                                        {node.isOnline &&
+                                        {node.isOnline && node.models.length > 0 ? (
                                             node.models.map((m) => {
                                                 const isSelected =
                                                     selectedTarget.nodeId === node.nodeId &&
@@ -133,7 +158,12 @@ export const UniversalNodePickerModal: React.FC<Props> = ({
                                                         {isSelected && <Text style={styles.checkmark}>✓</Text>}
                                                     </TouchableOpacity>
                                                 );
-                                            })}
+                                            })
+                                        ) : (
+                                            <Text style={styles.noModelsText}>
+                                                {node.isOnline ? 'No models loaded on this node.' : 'Node is currently unreachable on LAN.'}
+                                            </Text>
+                                        )}
                                     </View>
                                 );
                             })
@@ -183,6 +213,7 @@ const styles = StyleSheet.create({
         borderColor: '#334155',
     },
     itemCardActive: { borderColor: '#38BDF8', backgroundColor: '#0284C715' },
+    disabledCard: { opacity: 0.6 },
     itemName: { color: '#F8FAFC', fontSize: 13, fontWeight: '700' },
     itemMeta: { color: '#64748B', fontSize: 11, marginTop: 2 },
     nodeBlock: {
@@ -221,4 +252,5 @@ const styles = StyleSheet.create({
     emptyWrap: { padding: 16, alignItems: 'center' },
     emptyText: { color: '#F8FAFC', fontSize: 12, fontWeight: '600' },
     emptySub: { color: '#64748B', fontSize: 11, textAlign: 'center', marginTop: 2 },
+    noModelsText: { color: '#64748B', fontSize: 11, paddingVertical: 4 },
 });

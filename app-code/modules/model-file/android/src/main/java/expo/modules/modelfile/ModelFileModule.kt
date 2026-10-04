@@ -5,6 +5,7 @@ import android.content.Intent
 import android.net.Uri
 import android.os.Build
 import android.provider.OpenableColumns
+import android.util.Log
 import expo.modules.kotlin.modules.Module
 import expo.modules.kotlin.modules.ModuleDefinition
 import java.io.File
@@ -14,10 +15,8 @@ class ModelFileModule : Module() {
     override fun definition() = ModuleDefinition {
         Name("ModelFile")
 
-        /**
-         * Copies a content:// URI exposed by Android's document picker
-         * into an app-private file:// destination.
-         */
+        Events("onWorkerInferenceRequest")
+
         AsyncFunction("copyContentUriToFile") { sourceUri: String, destinationPath: String ->
             val context: Context =
                 requireNotNull(appContext.reactContext) {
@@ -65,10 +64,6 @@ class ModelFileModule : Module() {
             destination.absolutePath
         }
 
-        /**
-         * Retrieves metadata for a model selected through Android's
-         * Storage Access Framework.
-         */
         AsyncFunction("getContentUriMetadata") { uriString: String ->
             val uri = Uri.parse(uriString)
             if (uri.scheme != "content") {
@@ -84,10 +79,7 @@ class ModelFileModule : Module() {
 
             resolver.query(
                 uri,
-                arrayOf(
-                    OpenableColumns.DISPLAY_NAME,
-                    OpenableColumns.SIZE
-                ),
+                arrayOf(OpenableColumns.DISPLAY_NAME, OpenableColumns.SIZE),
                 null,
                 null,
                 null
@@ -106,18 +98,12 @@ class ModelFileModule : Module() {
             }
 
             if (displayName.isNullOrBlank()) {
-                throw IllegalStateException("Unable to determine the original filename from the selected model.")
+                throw IllegalStateException("Unable to determine original filename.")
             }
 
-            mapOf(
-                "name" to displayName,
-                "sizeBytes" to sizeBytes
-            )
+            mapOf("name" to displayName, "sizeBytes" to sizeBytes)
         }
 
-        /**
-         * Checks GGUF magic header bytes (0x47 0x47 0x55 0x46).
-         */
         AsyncFunction("isGGUFFile") { fileUriString: String ->
             val fileUri = Uri.parse(fileUriString)
             if (fileUri.scheme != "file") {
@@ -128,55 +114,78 @@ class ModelFileModule : Module() {
                 ?: throw IllegalArgumentException("Could not resolve file path: $fileUriString")
 
             val file = File(filePath)
-            if (!file.exists()) {
-                throw IllegalArgumentException("File does not exist: $filePath")
-            }
-
-            if (file.length() < 4) {
-                return@AsyncFunction false
-            }
+            if (!file.exists() || file.length() < 4) return@AsyncFunction false
 
             file.inputStream().use { input ->
                 val header = ByteArray(4)
                 val bytesRead = input.read(header)
-                if (bytesRead != 4) {
-                    return@AsyncFunction false
-                }
+                if (bytesRead != 4) return@AsyncFunction false
 
                 return@AsyncFunction (
-                        header[0] == 0x47.toByte() && // G
-                                header[1] == 0x47.toByte() && // G
-                                header[2] == 0x55.toByte() && // U
-                                header[3] == 0x46.toByte()    // F
-                        )
+                    header[0] == 0x47.toByte() &&
+                    header[1] == 0x47.toByte() &&
+                    header[2] == 0x55.toByte() &&
+                    header[3] == 0x46.toByte()
+                )
             }
         }
 
-        /**
-         * Starts the background foreground service on port 8082.
-         */
         AsyncFunction("startWorkerService") {
-            val context: Context = appContext.reactContext ?: return@AsyncFunction false
-            val intent = Intent(context, EdgeComputeWorkerService::class.java).apply {
-                action = EdgeComputeWorkerService.ACTION_START
+            val context: Context = appContext.reactContext ?: run {
+                Log.e("ModelFileModule", "appContext.reactContext is null")
+                return@AsyncFunction false
             }
-            if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
-                context.startForegroundService(intent)
-            } else {
-                context.startService(intent)
+
+            try {
+                EdgeComputeWorkerService.onRequestInference = { requestId, prompt ->
+                    this@ModelFileModule.sendEvent(
+                        "onWorkerInferenceRequest",
+                        mapOf("requestId" to requestId, "prompt" to prompt)
+                    )
+                }
+
+                val intent = Intent(context, EdgeComputeWorkerService::class.java).apply {
+                    action = EdgeComputeWorkerService.ACTION_START
+                }
+                if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
+                    context.startForegroundService(intent)
+                } else {
+                    context.startService(intent)
+                }
+                Log.d("ModelFileModule", "startForegroundService intent dispatched")
+                return@AsyncFunction true
+            } catch (e: Exception) {
+                Log.e("ModelFileModule", "startWorkerService failed: ${e.message}", e)
+                throw e
             }
-            return@AsyncFunction true
         }
 
-        /**
-         * Stops the background compute service and releases wake/wifi locks.
-         */
         AsyncFunction("stopWorkerService") {
             val context: Context = appContext.reactContext ?: return@AsyncFunction false
             val intent = Intent(context, EdgeComputeWorkerService::class.java).apply {
                 action = EdgeComputeWorkerService.ACTION_STOP
             }
             context.startService(intent)
+            EdgeComputeWorkerService.onRequestInference = null
+            Log.d("ModelFileModule", "stopWorkerService intent dispatched")
+            return@AsyncFunction true
+        }
+
+        AsyncFunction("setWorkerActiveModel") { modelName: String ->
+            EdgeComputeWorkerService.activeModelName = modelName
+            Log.d("ModelFileModule", "setWorkerActiveModel: $modelName")
+            return@AsyncFunction true
+        }
+
+        AsyncFunction("pushWorkerToken") { requestId: String, token: String ->
+            val session = EdgeComputeWorkerService.activeSessions[requestId]
+            session?.onToken?.invoke(token)
+            return@AsyncFunction true
+        }
+
+        AsyncFunction("finishWorkerInference") { requestId: String ->
+            val session = EdgeComputeWorkerService.activeSessions[requestId]
+            session?.latch?.countDown()
             return@AsyncFunction true
         }
     }

@@ -1,4 +1,4 @@
-import React, { useState } from 'react';
+import React, { useState, useEffect } from 'react';
 import {
     Modal,
     View,
@@ -8,11 +8,15 @@ import {
     FlatList,
     TouchableWithoutFeedback,
     Alert,
+    Switch,
+    TextInput, PermissionsAndroid, Platform,
 } from 'react-native';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import { ConversationRecord } from '../database/repository';
 import { SearchProvider } from '../services/SecureStorageService';
 import { PairDesktopModal } from './PairDesktopModal';
+import { MeshIdentityService } from '../services/MeshIdentityService';
+import ModelFile from '../../modules/model-file/src/ModelFileModule';
 
 interface Props {
     visible: boolean;
@@ -45,6 +49,51 @@ export const ConversationDrawer: React.FC<Props> = ({
                                                     }) => {
     const insets = useSafeAreaInsets();
     const [isPairModalOpen, setIsPairModalOpen] = useState(false);
+    const [isWorkerEnabled, setIsWorkerEnabled] = useState(false);
+    const [deviceTier, setDeviceTier] = useState<string>('thin');
+
+    // Cross-Platform Android Rename Modal State
+    const [renameModalVisible, setRenameModalVisible] = useState(false);
+    const [renameTargetId, setRenameTargetId] = useState<string | null>(null);
+    const [renameTitleInput, setRenameTitleInput] = useState('');
+
+    useEffect(() => {
+        (async () => {
+            const identity = await MeshIdentityService.getInstance().getOrCreateIdentity();
+            setIsWorkerEnabled(identity.is_worker_enabled === 1);
+            setDeviceTier(identity.node_tier);
+        })();
+    }, [visible]);
+
+    const handleToggleWorker = async (value: boolean) => {
+        try {
+            if (value) {
+                // Request Notification Permission on Android 13+ (API 33+)
+                if (Platform.OS === 'android' && Platform.Version >= 33) {
+                    const granted = await PermissionsAndroid.request(
+                        PermissionsAndroid.PERMISSIONS.POST_NOTIFICATIONS
+                    );
+                    if (granted !== PermissionsAndroid.RESULTS.GRANTED) {
+                        Alert.alert(
+                            'Permission Required',
+                            'Please grant notification permission so the worker can run continuously in the background.'
+                        );
+                    }
+                }
+
+                const started = await ModelFile.startWorkerService();
+                if (!started) {
+                    throw new Error('Native worker service returned false.');
+                }
+            } else {
+                await ModelFile.stopWorkerService();
+            }
+            await MeshIdentityService.getInstance().setWorkerEnabled(value);
+            setIsWorkerEnabled(value);
+        } catch (err: any) {
+            Alert.alert('Worker Error', err.message || 'Failed to toggle mobile worker service.');
+        }
+    };
 
     const handleLongPress = (item: ConversationRecord) => {
         Alert.alert(
@@ -54,23 +103,9 @@ export const ConversationDrawer: React.FC<Props> = ({
                 {
                     text: 'Rename',
                     onPress: () => {
-                        Alert.prompt(
-                            'Rename Chat',
-                            'Enter a new title:',
-                            [
-                                { text: 'Cancel', style: 'cancel' },
-                                {
-                                    text: 'Save',
-                                    onPress: (newTitle?: string) => {
-                                        if (newTitle && newTitle.trim()) {
-                                            onRename(item.id, newTitle.trim());
-                                        }
-                                    },
-                                },
-                            ],
-                            'plain-text',
-                            item.title
-                        );
+                        setRenameTargetId(item.id);
+                        setRenameTitleInput(item.title);
+                        setRenameModalVisible(true);
                     },
                 },
                 {
@@ -82,6 +117,14 @@ export const ConversationDrawer: React.FC<Props> = ({
             ],
             { cancelable: true }
         );
+    };
+
+    const submitRename = () => {
+        if (renameTargetId && renameTitleInput.trim()) {
+            onRename(renameTargetId, renameTitleInput.trim());
+        }
+        setRenameModalVisible(false);
+        setRenameTargetId(null);
     };
 
     return (
@@ -111,85 +154,53 @@ export const ConversationDrawer: React.FC<Props> = ({
                             }}
                         >
                             <Text style={styles.workspaceIcon}>💬</Text>
-                            <Text
-                                style={[
-                                    styles.workspaceText,
-                                    activeTab === 'chat' && styles.workspaceTextActive,
-                                ]}
-                            >
+                            <Text style={[styles.workspaceText, activeTab === 'chat' && styles.workspaceTextActive]}>
                                 Chat Assistant
                             </Text>
                         </TouchableOpacity>
 
                         <TouchableOpacity
-                            style={[
-                                styles.workspaceItem,
-                                activeTab === 'studio' && styles.workspaceItemActive,
-                            ]}
+                            style={[styles.workspaceItem, activeTab === 'studio' && styles.workspaceItemActive]}
                             onPress={() => {
                                 onSelectTab('studio');
                                 onClose();
                             }}
                         >
                             <Text style={styles.workspaceIcon}>🎨</Text>
-                            <Text
-                                style={[
-                                    styles.workspaceText,
-                                    activeTab === 'studio' && styles.workspaceTextActive,
-                                ]}
-                            >
+                            <Text style={[styles.workspaceText, activeTab === 'studio' && styles.workspaceTextActive]}>
                                 Visual Studio
                             </Text>
                         </TouchableOpacity>
 
                         <TouchableOpacity
-                            style={[
-                                styles.workspaceItem,
-                                activeTab === 'mindspace' && styles.workspaceItemActive,
-                            ]}
+                            style={[styles.workspaceItem, activeTab === 'mindspace' && styles.workspaceItemActive]}
                             onPress={() => {
                                 onSelectTab('mindspace');
                                 onClose();
                             }}
                         >
                             <Text style={styles.workspaceIcon}>📚</Text>
-                            <Text
-                                style={[
-                                    styles.workspaceText,
-                                    activeTab === 'mindspace' && styles.workspaceTextActive,
-                                ]}
-                            >
+                            <Text style={[styles.workspaceText, activeTab === 'mindspace' && styles.workspaceTextActive]}>
                                 MindSpace Notebooks
                             </Text>
                         </TouchableOpacity>
 
                         <TouchableOpacity
-                            style={[
-                                styles.workspaceItem,
-                                activeTab === 'advisor' && styles.workspaceItemActive,
-                            ]}
+                            style={[styles.workspaceItem, activeTab === 'advisor' && styles.workspaceItemActive]}
                             onPress={() => {
                                 onSelectTab('advisor');
                                 onClose();
                             }}
                         >
                             <Text style={styles.workspaceIcon}>🤝</Text>
-                            <Text
-                                style={[
-                                    styles.workspaceText,
-                                    activeTab === 'advisor' && styles.workspaceTextActive,
-                                ]}
-                            >
+                            <Text style={[styles.workspaceText, activeTab === 'advisor' && styles.workspaceTextActive]}>
                                 Message Advisor
                             </Text>
                         </TouchableOpacity>
 
                         {/* Compute Mesh Pairing Action */}
                         <View style={styles.meshDivider} />
-                        <TouchableOpacity
-                            style={styles.meshBtn}
-                            onPress={() => setIsPairModalOpen(true)}
-                        >
+                        <TouchableOpacity style={styles.meshBtn} onPress={() => setIsPairModalOpen(true)}>
                             <Text style={styles.workspaceIcon}>⚡</Text>
                             <View style={{ flex: 1 }}>
                                 <Text style={styles.meshBtnText}>Pair Desktop Node</Text>
@@ -197,6 +208,22 @@ export const ConversationDrawer: React.FC<Props> = ({
                             </View>
                             <Text style={styles.meshArrow}>➔</Text>
                         </TouchableOpacity>
+
+                        {/* Mobile Worker Server Toggle (Thick Mobile Only) */}
+                        {deviceTier === 'thick_mobile' && (
+                            <View style={styles.workerToggleRow}>
+                                <View style={{ flex: 1 }}>
+                                    <Text style={styles.workerToggleLabel}>Mobile Worker (Port 8765)</Text>
+                                    <Text style={styles.workerToggleSub}>Serve local GPU to thin clients</Text>
+                                </View>
+                                <Switch
+                                    value={isWorkerEnabled}
+                                    onValueChange={handleToggleWorker}
+                                    trackColor={{ false: '#334155', true: '#0284C7' }}
+                                    thumbColor={isWorkerEnabled ? '#38BDF8' : '#94A3B8'}
+                                />
+                            </View>
+                        )}
                     </View>
 
                     {/* New Chat Button */}
@@ -259,6 +286,35 @@ export const ConversationDrawer: React.FC<Props> = ({
                             onClose();
                         }}
                     />
+
+                    {/* Android & Cross-Platform Rename Modal */}
+                    <Modal visible={renameModalVisible} transparent animationType="fade">
+                        <View style={styles.renameOverlay}>
+                            <View style={styles.renameCard}>
+                                <Text style={styles.renameTitle}>Rename Conversation</Text>
+                                <TextInput
+                                    style={styles.renameInput}
+                                    value={renameTitleInput}
+                                    onChangeText={setRenameTitleInput}
+                                    autoFocus
+                                    selectTextOnFocus
+                                    placeholder="Enter conversation title..."
+                                    placeholderTextColor="#64748B"
+                                />
+                                <View style={styles.renameActionRow}>
+                                    <TouchableOpacity
+                                        style={styles.renameCancelBtn}
+                                        onPress={() => setRenameModalVisible(false)}
+                                    >
+                                        <Text style={styles.renameCancelText}>Cancel</Text>
+                                    </TouchableOpacity>
+                                    <TouchableOpacity style={styles.renameSaveBtn} onPress={submitRename}>
+                                        <Text style={styles.renameSaveText}>Save</Text>
+                                    </TouchableOpacity>
+                                </View>
+                            </View>
+                        </View>
+                    </Modal>
                 </View>
             </View>
         </Modal>
@@ -339,6 +395,20 @@ const styles = StyleSheet.create({
     meshBtnText: { color: '#38BDF8', fontSize: 12, fontWeight: '700' },
     meshBtnSub: { color: '#64748B', fontSize: 10 },
     meshArrow: { color: '#38BDF8', fontSize: 12, fontWeight: '700' },
+    workerToggleRow: {
+        flexDirection: 'row',
+        alignItems: 'center',
+        justifyContent: 'space-between',
+        marginTop: 8,
+        paddingHorizontal: 8,
+        paddingVertical: 6,
+        backgroundColor: '#0F172A',
+        borderRadius: 6,
+        borderWidth: 1,
+        borderColor: '#334155',
+    },
+    workerToggleLabel: { color: '#F8FAFC', fontSize: 11, fontWeight: '700' },
+    workerToggleSub: { color: '#64748B', fontSize: 9 },
     newChatBtn: {
         backgroundColor: '#0284C7',
         paddingVertical: 10,
@@ -377,4 +447,39 @@ const styles = StyleSheet.create({
     searchSettingTitle: { color: '#F8FAFC', fontSize: 12, fontWeight: '600' },
     searchSettingSubtitle: { color: '#38BDF8', fontSize: 10, marginTop: 1 },
     searchSettingAction: { color: '#94A3B8', fontSize: 11, fontWeight: '600' },
+    renameOverlay: {
+        flex: 1,
+        backgroundColor: 'rgba(0,0,0,0.7)',
+        justifyContent: 'center',
+        padding: 24,
+    },
+    renameCard: {
+        backgroundColor: '#1E293B',
+        borderRadius: 12,
+        padding: 16,
+        borderWidth: 1,
+        borderColor: '#334155',
+    },
+    renameTitle: { color: '#F8FAFC', fontSize: 15, fontWeight: '700', marginBottom: 12 },
+    renameInput: {
+        backgroundColor: '#0F172A',
+        color: '#F8FAFC',
+        borderRadius: 8,
+        paddingHorizontal: 12,
+        paddingVertical: 8,
+        fontSize: 13,
+        borderWidth: 1,
+        borderColor: '#334155',
+        marginBottom: 14,
+    },
+    renameActionRow: { flexDirection: 'row', justifyContent: 'flex-end', gap: 10 },
+    renameCancelBtn: { paddingVertical: 8, paddingHorizontal: 12 },
+    renameCancelText: { color: '#94A3B8', fontSize: 13, fontWeight: '600' },
+    renameSaveBtn: {
+        backgroundColor: '#0284C7',
+        paddingVertical: 8,
+        paddingHorizontal: 16,
+        borderRadius: 6,
+    },
+    renameSaveText: { color: '#FFFFFF', fontSize: 13, fontWeight: '700' },
 });

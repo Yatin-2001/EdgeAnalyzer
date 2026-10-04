@@ -44,14 +44,13 @@ import { StudioScreen } from '@/src/screens/StudioScreen';
 import { MindspaceHomeScreen } from '@/src/screens/mindspace/MindspaceHomeScreen';
 import { NotebookDetailScreen } from '@/src/screens/mindspace/NotebookDetailScreen';
 
-import {AdvisorWorkspaceScreen} from "@/src/screens/advisor/AdvisorWorkspaceScreen";
-import {ContactDetailScreen} from "@/src/screens/advisor/ContactDetailScreen";
-import {RelationshipHubScreen} from "@/src/screens/advisor/RelationshipHubScreen";
+import { AdvisorWorkspaceScreen } from '@/src/screens/advisor/AdvisorWorkspaceScreen';
+import { ContactDetailScreen } from '@/src/screens/advisor/ContactDetailScreen';
+import { RelationshipHubScreen } from '@/src/screens/advisor/RelationshipHubScreen';
 
 import { ComputeTargetSwitcher } from '@/src/components/ComputeTargetSwitcher';
-import {MeshClientService, UnifiedComputeTarget} from '@/src/services/MeshClientService';
-
-
+import { MeshClientService, UnifiedComputeTarget } from '@/src/services/MeshClientService';
+import ModelFile from '@/modules/model-file/src/ModelFileModule';
 
 export default function ChatScreen() {
   const [activeTab, setActiveTab] = useState<'chat' | 'studio' | 'mindspace' | 'advisor'>('chat');
@@ -83,7 +82,6 @@ export default function ChatScreen() {
   const toolOrchestrator = useRef(ToolOrchestrator.getInstance()).current;
   const flatListRef = useRef<FlatList>(null);
 
-  // Inside ChatScreen() in app/index.tsx:
   const mesh = useRef(MeshClientService.getInstance()).current;
   const [currentTarget, setCurrentTarget] = useState<UnifiedComputeTarget>(mesh.getSelectedTarget());
 
@@ -111,6 +109,7 @@ export default function ChatScreen() {
     return () => {
       llm.unloadModel().catch(() => {});
       modelManager.deleteWorkingCopy('chat').catch(() => {});
+      ModelFile.setWorkerActiveModel('No Model Loaded').catch(() => {});
     };
   }, []);
 
@@ -120,6 +119,41 @@ export default function ChatScreen() {
       setSearchProvider(activeSearch);
     })();
   }, []);
+
+  // Listen for remote inference requests arriving from thin clients over port 8082
+  useEffect(() => {
+    const subscription = ModelFile.addListener(
+        'onWorkerInferenceRequest',
+        async (event: { requestId: string; prompt: string }) => {
+          const { requestId, prompt: incomingPrompt } = event;
+          try {
+            if (!llm.isReady()) {
+              await ModelFile.pushWorkerToken(requestId, '[Error: Host model is not ready]');
+              await ModelFile.finishWorkerInference(requestId);
+              return;
+            }
+
+            // Execute inference on Snapdragon GPU and stream tokens back to the native SSE response
+            await llm.streamCompletion(
+                incomingPrompt,
+                {
+                  onToken: (token: string) => {
+                    ModelFile.pushWorkerToken(requestId, token).catch(() => {});
+                  },
+                }
+            );
+          } catch (err: any) {
+            await ModelFile.pushWorkerToken(requestId, `[Inference Error: ${err.message}]`);
+          } finally {
+            await ModelFile.finishWorkerInference(requestId);
+          }
+        }
+    );
+
+    return () => {
+      subscription.remove();
+    };
+  }, [llm]);
 
   const switchConversation = async (conv: ConversationRecord) => {
     setActiveConv(conv);
@@ -170,6 +204,7 @@ export default function ChatScreen() {
 
       if (!selectedRecord) {
         setStatus('UNLOADED');
+        ModelFile.setWorkerActiveModel('No Model Loaded').catch(() => {});
         return;
       }
 
@@ -179,6 +214,7 @@ export default function ChatScreen() {
           llm.isReady()
       ) {
         setStatus('READY');
+        ModelFile.setWorkerActiveModel(selectedRecord.original_name).catch(() => {});
         return;
       }
 
@@ -213,8 +249,12 @@ export default function ChatScreen() {
       );
 
       setStatus(llm.getStatus());
+
+      // Sync active model name dynamically to native worker service
+      ModelFile.setWorkerActiveModel(prepared.originalName).catch(() => {});
     } catch (error) {
       setStatus('ERROR');
+      ModelFile.setWorkerActiveModel('No Model Loaded').catch(() => {});
       Alert.alert('Model Load Failed', error instanceof Error ? error.message : String(error));
     }
   };
@@ -222,7 +262,6 @@ export default function ChatScreen() {
   const handleSendMessage = async () => {
     if (!prompt.trim() || !activeConv) return;
 
-    // Check readiness based on target
     if (!isRemoteTarget && !llm.isReady()) {
       Alert.alert('Model Not Loaded', 'Please load a local model or select a remote mesh node.');
       return;
@@ -243,9 +282,7 @@ export default function ChatScreen() {
       let generatedTokens = 0;
 
       if (isRemoteTarget) {
-        // ==========================================
         // ROUTE A: Remote Mesh Node (Desktop / Phone Worker)
-        // ==========================================
         const startTime = Date.now();
         await mesh.streamChat(
             updatedMessages.map((m) => ({ role: m.role, content: m.content })),
@@ -264,9 +301,7 @@ export default function ChatScreen() {
         });
 
       } else {
-        // ==========================================
         // ROUTE B: On-Device Snapdragon (Direct JNI)
-        // ==========================================
         const memoryContext = await memoryService.retrieveRelevantMemory(userText, activeConv.id);
         const baseSystem =
             (activeConv.system_prompt || 'You are a helpful, concise AI assistant running locally on-device.') +
@@ -306,7 +341,6 @@ export default function ChatScreen() {
         }
       }
 
-      // Ingest memory turn
       memoryService.ingestTurnAsync(userMsg.id, assistantMsg.id, activeConv.id, userText, fullText);
     } catch (error: any) {
       setStatus(isRemoteTarget ? 'READY' : llm.getStatus());
@@ -326,7 +360,7 @@ export default function ChatScreen() {
     );
   }
 
-// MindSpace Screen Tab Routing
+  // MindSpace Screen Tab Routing
   if (activeTab === 'mindspace') {
     if (activeNotebookId) {
       return (
@@ -347,7 +381,7 @@ export default function ChatScreen() {
     );
   }
 
-  // 2. Add advisor routing block before main return:
+  // Advisor Routing
   if (activeTab === 'advisor') {
     if (isAdvisorWorkspaceOpen) {
       return (
@@ -383,12 +417,11 @@ export default function ChatScreen() {
     );
   }
 
-  // Clean Main Chat Screen
   return (
       <View style={[styles.screen, { paddingTop: insets.top }]}>
         <StatusBar barStyle="light-content" backgroundColor="#0F172A" />
 
-        {/* Clean Top Bar: Drawer (☰) | Title & Model Selector | Settings (⚙) */}
+        {/* Top Bar */}
         <View style={styles.topBar}>
           <TouchableOpacity style={styles.iconBtn} onPress={() => setDrawerOpen(true)}>
             <Text style={styles.iconText}>☰</Text>
@@ -400,7 +433,7 @@ export default function ChatScreen() {
             </Text>
             <TouchableOpacity onPress={() => setRegistryOpen(true)} activeOpacity={0.7}>
               <Text style={styles.modelSubtext} numberOfLines={1}>
-                {llm.getLoadedModel()?.name || 'No Model Loaded ▾'}
+                {isRemoteTarget ? currentTarget.displayName : (llm.getLoadedModel()?.name || 'No Model Loaded ▾')}
               </Text>
             </TouchableOpacity>
           </View>
@@ -410,11 +443,11 @@ export default function ChatScreen() {
           </TouchableOpacity>
         </View>
 
-        {/* --- MOUNT COMPUTE TARGET SWITCHER HERE --- */}
+        {/* Compute Target Switcher */}
         <ComputeTargetSwitcher />
 
-        {/* Model Loading Banner */}
-        {status === 'LOADING' && (
+        {/* Loading Banner */}
+        {status === 'LOADING' && !isRemoteTarget && (
             <View style={styles.loadingBanner}>
               <ActivityIndicator size="small" color="#38BDF8" />
               <Text style={styles.loadingText}>Loading Weights: {loadProgress}%</Text>

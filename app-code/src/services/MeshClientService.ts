@@ -108,13 +108,18 @@ export class MeshClientService {
         if (Array.isArray(data.knownPeers)) {
             for (const peer of data.knownPeers) {
                 if (peer.deviceId && peer.deviceId !== identity.node_id) {
+                    const designatedPort =
+                        peer.deviceTier === 'thick_mobile' && (!peer.network?.port || peer.network.port === 8082)
+                            ? 8765
+                            : (peer.network?.port || 8080);
+
                     await upsertMeshPeer(
                         peer.deviceId,
                         peer.deviceName || 'Mesh Peer',
                         peer.deviceTier || 'thick_mobile',
                         peer.meshToken || token,
                         peer.network?.ip || ip,
-                        peer.network?.port || 8082
+                        designatedPort
                     );
                 }
             }
@@ -135,17 +140,56 @@ export class MeshClientService {
 
     public async scanAndSyncPeers(): Promise<void> {
         try {
+            const identity = await MeshIdentityService.getInstance().getOrCreateIdentity();
             const peers = await getAllTrustedPeers();
-            if (!peers || peers.length === 0) return;
 
+            // 1. Pull full cluster roster from any reachable desktop node
+            const desktopPeer = peers.find((p) => p.device_tier === 'thick_desktop');
+            if (desktopPeer) {
+                try {
+                    const clusterRes = await fetch(
+                        `http://${desktopPeer.last_known_ip}:${desktopPeer.last_known_port}/api/mesh/cluster/peers`
+                    );
+                    if (clusterRes.ok) {
+                        const clusterData = await clusterRes.json();
+                        if (Array.isArray(clusterData.peers)) {
+                            for (const cp of clusterData.peers) {
+                                if (cp.nodeId !== identity.node_id) {
+                                    await upsertMeshPeer(
+                                        cp.nodeId,
+                                        cp.nodeName,
+                                        cp.deviceTier,
+                                        cp.sharedToken,
+                                        cp.ip,
+                                        (cp.deviceTier === 'thick_mobile' && (!cp.port || cp.port === 8082)) ? 8765 : (cp.port || 8080)
+                                    );
+                                }
+                            }
+                        }
+                    }
+                } catch {
+                    // Desktop unreachable; continue probing peers locally
+                }
+            }
+
+            // 2. Refresh local trusted peer list from SQLite
+            const updatedPeers = await getAllTrustedPeers();
+            if (!updatedPeers || updatedPeers.length === 0) return;
+
+            // 3. Probe all known peers across the network
             await Promise.all(
-                peers.map(async (peer) => {
+                updatedPeers.map(async (peer) => {
                     const start = Date.now();
+                    const targetPort =
+                        (peer.device_tier === 'thick_mobile' && (!peer.last_known_port || peer.last_known_port === 8082))
+                            ? 8765
+                            : (peer.last_known_port || 8080);
+
                     try {
                         const controller = new AbortController();
                         const timeout = setTimeout(() => controller.abort(), 2500);
 
-                        const res = await fetch(`http://${peer.last_known_ip}:${peer.last_known_port}/api/mesh/telemetry`, {
+                        const res = await fetch(`http://${peer.last_known_ip}:${targetPort}/api/mesh/telemetry`, {
                             signal: controller.signal,
                         });
                         clearTimeout(timeout);
@@ -165,17 +209,17 @@ export class MeshClientService {
                                 nodeName: data.nodeName || peer.node_name,
                                 deviceTier: peer.device_tier,
                                 ip: peer.last_known_ip,
-                                port: peer.last_known_port,
+                                port: targetPort,
                                 sharedToken: peer.shared_token,
                                 isOnline: true,
                                 latencyMs,
                                 models,
                             });
                         } else {
-                            this.markOffline(peer);
+                            this.markOffline(peer, targetPort);
                         }
                     } catch {
-                        this.markOffline(peer);
+                        this.markOffline(peer, targetPort);
                     }
                 })
             );
@@ -187,7 +231,7 @@ export class MeshClientService {
         }
     }
 
-    private markOffline(peer: MeshPeerRecord): void {
+    private markOffline(peer: MeshPeerRecord, port: number): void {
         const existing = this.activeNodes.get(peer.node_id);
         if (existing) {
             existing.isOnline = false;
@@ -197,7 +241,7 @@ export class MeshClientService {
                 nodeName: peer.node_name,
                 deviceTier: peer.device_tier,
                 ip: peer.last_known_ip,
-                port: peer.last_known_port,
+                port,
                 sharedToken: peer.shared_token,
                 isOnline: false,
                 latencyMs: 0,
@@ -206,9 +250,6 @@ export class MeshClientService {
         }
     }
 
-    /**
-     * Maintains persistent authenticated WebSocket connection with the active node
-     */
     private ensurePersistentConnection(): void {
         const targetNode =
             this.selectedTarget.nodeId !== 'local_engine'
@@ -238,8 +279,43 @@ export class MeshClientService {
                 this.startHeartbeat(ws);
             };
 
-            ws.onmessage = (_e) => {
-                // Heartbeat pong received
+            // Ingest peer sync & peer join notifications pushed from Desktop
+            ws.onmessage = async (event) => {
+                try {
+                    const msg = JSON.parse(event.data.toString());
+                    const identity = await MeshIdentityService.getInstance().getOrCreateIdentity();
+
+                    if (msg.method === 'mcp.peer_joined' && msg.params) {
+                        const p = msg.params;
+                        if (p.nodeId !== identity.node_id) {
+                            await upsertMeshPeer(
+                                p.nodeId,
+                                p.nodeName,
+                                p.deviceTier,
+                                p.sharedToken,
+                                p.ip,
+                                (p.deviceTier === 'thick_mobile' && (!p.port || p.port === 8082)) ? 8765 : (p.port || 8080)
+                            );
+                            await this.scanAndSyncPeers();
+                        }
+                    } else if (msg.method === 'mcp.peer_sync' && Array.isArray(msg.params?.peers)) {
+                        for (const p of msg.params.peers) {
+                            if (p.nodeId !== identity.node_id) {
+                                await upsertMeshPeer(
+                                    p.nodeId,
+                                    p.nodeName,
+                                    p.deviceTier,
+                                    p.sharedToken,
+                                    p.ip,
+                                    (p.deviceTier === 'thick_mobile' && (!p.port || p.port === 8082)) ? 8765 : (p.port || 8080)
+                                );
+                            }
+                        }
+                        await this.scanAndSyncPeers();
+                    }
+                } catch {
+                    // Ignore ping/pong or malformed messages
+                }
             };
 
             ws.onclose = () => {
@@ -317,7 +393,6 @@ export class MeshClientService {
             const isPersistent =
                 this.persistentWs !== null && this.persistentWs.readyState === WebSocket.OPEN;
 
-            // Strongly typed as non-null WebSocket
             const socket: WebSocket = isPersistent
                 ? this.persistentWs!
                 : new WebSocket(`ws://${node.ip}:${node.port}/mcp?token=${encodeURIComponent(node.sharedToken)}`);
@@ -336,7 +411,6 @@ export class MeshClientService {
             const timeout = setTimeout(() => {
                 if (!hasReceivedChunk) {
                     cleanup();
-                    // Fall back to HTTP SSE stream if WebSocket stalls
                     this.streamFromDesktopHttp(node, model, messages, onToken)
                         .then(resolve)
                         .catch(reject);
@@ -443,38 +517,93 @@ export class MeshClientService {
         }
     }
 
-    private async streamFromMobileWorker(
+    private streamFromMobileWorker(
         node: MeshNodeEndpoint,
         prompt: string,
         onToken: (tok: string) => void
     ): Promise<void> {
-        const res = await fetch(`http://${node.ip}:${node.port}/api/mesh/inference`, {
-            method: 'POST',
-            headers: { 'Content-Type': 'application/json' },
-            body: JSON.stringify({ prompt }),
-        });
+        return new Promise((resolve, reject) => {
+            const xhr = new XMLHttpRequest();
+            const url = `http://${node.ip}:${node.port}/api/mesh/inference`;
 
-        if (!res.ok || !res.body) {
-            throw new Error(`Worker responded with status: ${res.status}`);
-        }
+            xhr.open('POST', url);
+            xhr.setRequestHeader('Content-Type', 'application/json');
 
-        const reader = (res as any).body?.getReader ? (res as any).body.getReader() : null;
-        if (reader) {
-            const decoder = new TextDecoder();
-            while (true) {
-                const { done, value } = await reader.read();
-                if (done) break;
-                const text = decoder.decode(value);
-                const lines = text.split('\n');
+            let processedLength = 0;
+            let buffer = '';
+            let isResolved = false;
+
+            const processBuffer = () => {
+                if (xhr.responseText.length <= processedLength) return;
+
+                const newChunk = xhr.responseText.slice(processedLength);
+                processedLength = xhr.responseText.length;
+                buffer += newChunk;
+
+                const lines = buffer.split('\n');
+                // Keep the trailing incomplete fragment in the buffer
+                buffer = lines.pop() || '';
+
                 for (const line of lines) {
-                    if (line.startsWith('data: ') && !line.includes('[DONE]')) {
-                        try {
-                            const data = JSON.parse(line.substring(6));
-                            if (data.token) onToken(data.token);
-                        } catch {}
+                    const trimmed = line.trim();
+                    if (!trimmed || !trimmed.startsWith('data: ')) continue;
+
+                    const dataStr = trimmed.slice(6).trim();
+                    if (dataStr === '[DONE]') {
+                        if (!isResolved) {
+                            isResolved = true;
+                            resolve();
+                        }
+                        return;
+                    }
+
+                    try {
+                        const parsed = JSON.parse(dataStr);
+                        if (parsed.token) {
+                            onToken(parsed.token);
+                        } else if (parsed.error) {
+                            if (!isResolved) {
+                                isResolved = true;
+                                reject(new Error(parsed.error));
+                            }
+                        }
+                    } catch {
+                        // Ignore partial JSON chunks
                     }
                 }
-            }
-        }
+            };
+
+            xhr.onprogress = () => {
+                processBuffer();
+            };
+
+            xhr.onload = () => {
+                processBuffer();
+                if (!isResolved) {
+                    isResolved = true;
+                    if (xhr.status >= 200 && xhr.status < 300) {
+                        resolve();
+                    } else {
+                        reject(new Error(`Worker responded with HTTP ${xhr.status}`));
+                    }
+                }
+            };
+
+            xhr.onerror = () => {
+                if (!isResolved) {
+                    isResolved = true;
+                    reject(new Error(`Network error while communicating with Mobile Worker at ${node.ip}:${node.port}`));
+                }
+            };
+
+            xhr.ontimeout = () => {
+                if (!isResolved) {
+                    isResolved = true;
+                    reject(new Error('Inference request to Mobile Worker timed out.'));
+                }
+            };
+
+            xhr.send(JSON.stringify({ prompt }));
+        });
     }
 }

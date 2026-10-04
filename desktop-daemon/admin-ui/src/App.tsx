@@ -6,7 +6,7 @@ import { OllamaModelShelf } from './components/OllamaModelShelf';
 import { Network, PlusCircle } from 'lucide-react';
 
 export default function App() {
-  const { devices, models, gpu, systemRam, ollama, revokeDevice } = useMeshAdmin();
+  const { devices, models, gpu, systemRam, ollama, revokeDevice, syncMeshRoster } = useMeshAdmin();
   const [isPairingOpen, setPairingOpen] = useState(false);
 
   return (
@@ -23,13 +23,21 @@ export default function App() {
               </div>
             </div>
 
-            <button
-                onClick={() => setPairingOpen(true)}
-                className="flex items-center gap-2 bg-indigo-600 hover:bg-indigo-500 text-white text-sm font-medium px-4 py-2.5 rounded-xl shadow-lg transition"
-            >
-              <PlusCircle className="w-4 h-4" />
-              Pair New Device
-            </button>
+            <div className="flex items-center gap-3">
+              <button
+                  onClick={syncMeshRoster}
+                  className="px-3.5 py-2 text-xs font-semibold rounded-lg bg-slate-800 hover:bg-slate-700 text-sky-400 border border-slate-700 transition-colors"
+              >
+                ⚡ Sync Mesh Roster
+              </button>
+              <button
+                  onClick={() => setPairingOpen(true)}
+                  className="flex items-center gap-2 bg-indigo-600 hover:bg-indigo-500 text-white text-sm font-medium px-4 py-2.5 rounded-xl shadow-lg transition"
+              >
+                <PlusCircle className="w-4 h-4" />
+                Pair New Device
+              </button>
+            </div>
           </header>
 
           <OllamaModelShelf gpu={gpu} systemRam={systemRam} ollama={ollama} models={models} />

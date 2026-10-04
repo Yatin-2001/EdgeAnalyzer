@@ -6,17 +6,22 @@ import android.app.NotificationManager
 import android.app.Service
 import android.content.Context
 import android.content.Intent
+import android.content.pm.ServiceInfo
 import android.net.wifi.WifiManager
 import android.os.Build
 import android.os.IBinder
 import android.os.PowerManager
+import android.util.Log
 import androidx.core.app.NotificationCompat
 import java.io.BufferedReader
 import java.io.InputStreamReader
 import java.io.OutputStream
 import java.net.ServerSocket
 import java.net.Socket
+import java.util.concurrent.ConcurrentHashMap
+import java.util.concurrent.CountDownLatch
 import java.util.concurrent.Executors
+import java.util.concurrent.TimeUnit
 import org.json.JSONObject
 
 class EdgeComputeWorkerService : Service() {
@@ -27,23 +32,32 @@ class EdgeComputeWorkerService : Service() {
     @Volatile private var isRunning = false
 
     companion object {
-        const val PORT = 8082
+        const val TAG = "EdgeComputeWorker"
+        const val PORT = 8765
         const val CHANNEL_ID = "EdgeComputeWorkerChannel"
         const val NOTIFICATION_ID = 4040
         const val ACTION_START = "ACTION_START_WORKER"
         const val ACTION_STOP = "ACTION_STOP_WORKER"
 
-        // Active model and inference handler bridge
-        @Volatile var activeModelName: String = "Llama 3.2 3B (Adreno)"
-        @Volatile var inferenceHandler: ((prompt: String, onToken: (String) -> Unit) -> String)? = null
+        @Volatile var activeModelName: String = "No Model Loaded"
+
+        data class InferenceSession(
+            val onToken: (String) -> Unit,
+            val latch: CountDownLatch
+        )
+        val activeSessions = ConcurrentHashMap<String, InferenceSession>()
+
+        @Volatile var onRequestInference: ((requestId: String, prompt: String) -> Unit)? = null
     }
 
     override fun onCreate() {
         super.onCreate()
+        Log.d(TAG, "Service onCreate called")
         createNotificationChannel()
     }
 
     override fun onStartCommand(intent: Intent?, flags: Int, startId: Int): Int {
+        Log.d(TAG, "onStartCommand action: ${intent?.action}")
         when (intent?.action) {
             ACTION_START -> startWorker()
             ACTION_STOP -> stopWorker()
@@ -52,18 +66,34 @@ class EdgeComputeWorkerService : Service() {
     }
 
     private fun startWorker() {
-        if (isRunning) return
+        if (isRunning) {
+            Log.d(TAG, "Worker already running on port $PORT")
+            return
+        }
         isRunning = true
 
         val notification: Notification = NotificationCompat.Builder(this, CHANNEL_ID)
             .setContentTitle("EdgeAnalyzer Mesh Node (Active)")
-            .setContentText("Listening on port $PORT • Serving local GPU inference to mesh peers")
+            .setContentText("Port $PORT • Serving local GPU inference to mesh peers")
             .setSmallIcon(android.R.drawable.stat_notify_sync)
             .setOngoing(true)
             .setPriority(NotificationCompat.PRIORITY_HIGH)
             .build()
 
-        startForeground(NOTIFICATION_ID, notification)
+        try {
+            if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q) {
+                startForeground(
+                    NOTIFICATION_ID,
+                    notification,
+                    ServiceInfo.FOREGROUND_SERVICE_TYPE_DATA_SYNC
+                )
+            } else {
+                startForeground(NOTIFICATION_ID, notification)
+            }
+            Log.d(TAG, "startForeground completed successfully with DATA_SYNC")
+        } catch (e: Exception) {
+            Log.e(TAG, "Failed to startForeground: ${e.message}", e)
+        }
 
         val powerManager = getSystemService(Context.POWER_SERVICE) as PowerManager
         wakeLock = powerManager.newWakeLock(PowerManager.PARTIAL_WAKE_LOCK, "EdgeAnalyzer::WorkerWakeLock").apply {
@@ -75,22 +105,26 @@ class EdgeComputeWorkerService : Service() {
             acquire()
         }
 
-        // Launch Embedded TCP HTTP Server
         threadPool.execute {
             try {
-                serverSocket = ServerSocket(PORT)
+                val ss = ServerSocket()
+                ss.reuseAddress = true // Allows immediate rebinding even in TIME_WAIT state
+                ss.bind(java.net.InetSocketAddress(PORT))
+                serverSocket = ss
+                Log.d(TAG, "ServerSocket listening successfully on 0.0.0.0:$PORT")
                 while (isRunning && serverSocket?.isClosed == false) {
                     val clientSocket = serverSocket?.accept() ?: break
                     threadPool.execute { handleClient(clientSocket) }
                 }
             } catch (e: Exception) {
-                // Socket closed on stop
+                Log.e(TAG, "ServerSocket error on port $PORT: ${e.message}", e)
             }
         }
     }
 
     private fun handleClient(socket: Socket) {
         try {
+            socket.soTimeout = 15000 // 15-second read timeout
             val reader = BufferedReader(InputStreamReader(socket.getInputStream()))
             val out = socket.getOutputStream()
 
@@ -111,27 +145,36 @@ class EdgeComputeWorkerService : Service() {
                 }
             }
 
-            // Route 1: Telemetry & Model Discovery
-            if (method == "GET" && path.startsWith("/api/mesh/telemetry")) {
-                val json = JSONObject().apply {
-                    put("nodeName", "OnePlus 15")
-                    put("tier", "thick_mobile")
-                    put("status", "ready")
-                    put("activeModel", activeModelName)
-                    put("gpu", "Qualcomm Adreno (OpenCL)")
-                    put("models", org.json.JSONArray().apply {
-                        put(JSONObject().apply {
-                            put("name", activeModelName)
-                            put("parameter_size", "3B")
-                            put("size", 2147483648L)
-                        })
-                    })
-                }
-                sendHttpResponse(out, 200, "OK", "application/json", json.toString())
+            // CORS Preflight
+            if (method == "OPTIONS") {
+                sendHttpResponse(socket, out, 204, "No Content", "text/plain", "")
                 return
             }
 
-            // Route 2: Streaming Inference Execution
+            // Route 1: Telemetry & Model Discovery
+            if (method == "GET" && path.startsWith("/api/mesh/telemetry")) {
+                val hasModel = activeModelName != "No Model Loaded"
+                val json = JSONObject().apply {
+                    put("nodeName", "OnePlus 15")
+                    put("tier", "thick_mobile")
+                    put("status", if (hasModel) "ready" else "idle")
+                    put("activeModel", if (hasModel) activeModelName else null)
+                    put("gpu", "Qualcomm Adreno (OpenCL)")
+                    put("models", org.json.JSONArray().apply {
+                        if (hasModel) {
+                            put(JSONObject().apply {
+                                put("name", activeModelName)
+                                put("parameter_size", "Dynamic")
+                                put("size", 0L)
+                            })
+                        }
+                    })
+                }
+                sendHttpResponse(socket, out, 200, "OK", "application/json", json.toString())
+                return
+            }
+
+            // Route 2: SSE Streaming Inference
             if (method == "POST" && path.startsWith("/api/mesh/inference")) {
                 val bodyChars = CharArray(contentLength)
                 reader.read(bodyChars, 0, contentLength)
@@ -139,58 +182,74 @@ class EdgeComputeWorkerService : Service() {
                 val reqJson = JSONObject(bodyStr)
                 val prompt = reqJson.optString("prompt", "")
 
-                // Send HTTP SSE Stream Header
                 val header = "HTTP/1.1 200 OK\r\n" +
                         "Content-Type: text/event-stream\r\n" +
                         "Cache-Control: no-cache\r\n" +
                         "Connection: keep-alive\r\n" +
                         "Access-Control-Allow-Origin: *\r\n\r\n"
-                out.write(header.toByteArray())
+                out.write(header.toByteArray(Charsets.UTF_8))
                 out.flush()
 
-                // Execute inference via the registered LLMService bridge
-                val handler = inferenceHandler
-                if (handler != null) {
-                    handler.invoke(prompt) { token ->
-                        try {
-                            val chunk = "data: " + JSONObject().put("token", token).toString() + "\n\n"
-                            out.write(chunk.toByteArray())
-                            out.flush()
-                        } catch (e: Exception) {}
-                    }
-                } else {
-                    val fallback = "data: {\"token\":\"[Error: LLM model not loaded on host phone]\"}\n\n"
-                    out.write(fallback.toByteArray())
+                val dispatcher = onRequestInference
+                if (dispatcher == null || activeModelName == "No Model Loaded") {
+                    val fallback = "data: {\"token\":\"[Error: No active model loaded on host phone]\"}\n\n"
+                    out.write(fallback.toByteArray(Charsets.UTF_8))
+                    out.write("data: [DONE]\n\n".toByteArray(Charsets.UTF_8))
                     out.flush()
+                    return
                 }
 
-                out.write("data: [DONE]\n\n".toByteArray())
+                val requestId = "req_${System.currentTimeMillis()}"
+                val latch = CountDownLatch(1)
+
+                activeSessions[requestId] = InferenceSession(
+                    onToken = { token ->
+                        try {
+                            val chunk = "data: " + JSONObject().put("token", token).toString() + "\n\n"
+                            out.write(chunk.toByteArray(Charsets.UTF_8))
+                            out.flush()
+                        } catch (e: Exception) {}
+                    },
+                    latch = latch
+                )
+
+                dispatcher.invoke(requestId, prompt)
+
+                latch.await(120, TimeUnit.SECONDS)
+                activeSessions.remove(requestId)
+
+                out.write("data: [DONE]\n\n".toByteArray(Charsets.UTF_8))
                 out.flush()
                 return
             }
 
-            // 404 Fallback
-            sendHttpResponse(out, 404, "Not Found", "text/plain", "Not Found")
+            sendHttpResponse(socket, out, 404, "Not Found", "text/plain", "Not Found")
         } catch (e: Exception) {
-            // Client closed connection
+            Log.e(TAG, "Client socket error: ${e.message}")
         } finally {
             try { socket.close() } catch (e: Exception) {}
         }
     }
 
-    private fun sendHttpResponse(out: OutputStream, code: Int, status: String, contentType: String, body: String) {
+    private fun sendHttpResponse(socket: Socket, out: OutputStream, code: Int, status: String, contentType: String, body: String) {
         val bytes = body.toByteArray(Charsets.UTF_8)
         val response = "HTTP/1.1 $code $status\r\n" +
                 "Content-Type: $contentType\r\n" +
                 "Content-Length: ${bytes.size}\r\n" +
                 "Access-Control-Allow-Origin: *\r\n" +
+                "Access-Control-Allow-Methods: GET, POST, OPTIONS\r\n" +
+                "Access-Control-Allow-Headers: Content-Type\r\n" +
                 "Connection: close\r\n\r\n"
-        out.write(response.toByteArray())
+        out.write(response.toByteArray(Charsets.UTF_8))
         out.write(bytes)
         out.flush()
+        try {
+            socket.shutdownOutput() // Clean FIN handshake to prevent client connection resets
+        } catch (e: Exception) {}
     }
 
     private fun stopWorker() {
+        Log.d(TAG, "stopWorker called")
         isRunning = false
         try { serverSocket?.close() } catch (e: Exception) {}
         wakeLock?.let { if (it.isHeld) it.release() }

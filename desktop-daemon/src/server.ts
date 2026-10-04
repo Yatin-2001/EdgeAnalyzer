@@ -9,7 +9,7 @@ import { PairingManager } from './mesh/PairingManager.js';
 import { DiscoveryService } from './mesh/DiscoveryService.js';
 import { OllamaBridge } from './mcp/OllamaBridge.js';
 import { MCPProtocol } from './mcp/MCPProtocol.js';
-import { SystemTelemetry } from './mesh/SystemTelemetry';
+import { SystemTelemetry } from './mesh/SystemTelemetry.js';
 
 const PORT = 8080;
 const app = express();
@@ -19,7 +19,6 @@ const wss = new WebSocketServer({ server, path: '/mcp' });
 app.use(cors());
 app.use(express.json({ limit: '50mb' }));
 
-// Helper: Get local network IPv4 address (e.g., 192.168.1.X)
 function getLocalNetworkIp(): string {
     const interfaces = os.networkInterfaces();
     for (const name of Object.keys(interfaces)) {
@@ -30,6 +29,11 @@ function getLocalNetworkIp(): string {
         }
     }
     return '127.0.0.1';
+}
+
+function normalizeIp(rawIp: string | undefined): string {
+    if (!rawIp) return 'unknown';
+    return rawIp.replace('::ffff:', '');
 }
 
 const adminDistPath = path.resolve(__dirname, '../admin-ui/dist');
@@ -43,6 +47,32 @@ const mcp = new MCPProtocol();
 const telemetryService = SystemTelemetry.getInstance();
 
 const activeSockets = new Map<string, WebSocket>();
+const lastHeartbeatMap = new Map<string, number>();
+
+// Helper: Broadcast peer sync payload to all active devices
+function broadcastPeerRoster(): void {
+    const peers = deviceStore.getAll().filter((d) => !d.isRevoked);
+    const syncPayload = JSON.stringify({
+        jsonrpc: '2.0',
+        method: 'mcp.peer_sync',
+        params: {
+            peers: peers.map((d) => ({
+                nodeId: d.deviceId,
+                nodeName: d.deviceName,
+                deviceTier: d.deviceTier,
+                ip: d.network.ip,
+                port: (d.deviceTier === 'thick_mobile' && (!d.network.port || d.network.port === 8082)) ? 8765 : (d.network.port || 8080),
+                sharedToken: d.meshToken,
+            })),
+        },
+    });
+
+    for (const [_, socket] of activeSockets.entries()) {
+        if (socket.readyState === WebSocket.OPEN) {
+            socket.send(syncPayload);
+        }
+    }
+}
 
 // 1. PIN Management Routes
 app.post('/api/mesh/pin/generate', (_req, res) => {
@@ -75,11 +105,14 @@ app.post('/api/mesh/pair', (req, res) => {
 
     try {
         const clientIp = normalizeIp(req.socket.remoteAddress);
+        // Default thick_mobile to port 8082, desktop to 8080
+        const designatedPort = deviceTier === 'thick_mobile' ? 8765 : (deviceTier === 'thick_desktop' ? PORT : 0);
+
         const { meshToken, clusterSecret, knownPeers } = pairingManager.verifyAndRegisterDevice(pin, {
             deviceId,
             deviceName,
             deviceTier,
-            network: { ip: clientIp, port: 0 },
+            network: { ip: clientIp, port: designatedPort },
             capabilities: capabilities || {
                 canRunInference: deviceTier === 'thick_mobile',
                 activeModality: 'both',
@@ -87,7 +120,7 @@ app.post('/api/mesh/pair', (req, res) => {
             },
         });
 
-        // Broadcast new peer event to all active clients (Peer Introduction)
+        // Broadcast single peer announcement with port
         const newPeerAnnouncement = JSON.stringify({
             jsonrpc: '2.0',
             method: 'mcp.peer_joined',
@@ -96,6 +129,7 @@ app.post('/api/mesh/pair', (req, res) => {
                 nodeName: deviceName,
                 deviceTier,
                 ip: clientIp,
+                port: designatedPort,
                 sharedToken: meshToken,
             },
         });
@@ -118,7 +152,31 @@ app.post('/api/mesh/pair', (req, res) => {
         res.status(401).json({ error: err.message });
     }
 });
-// 3. Paired Devices Management
+
+// 3. Cluster Roster & Synchronization Routes
+app.get('/api/mesh/cluster/peers', (_req, res) => {
+    const peers = deviceStore.getAll().filter((d) => !d.isRevoked).map((d) => ({
+        nodeId: d.deviceId,
+        nodeName: d.deviceName,
+        deviceTier: d.deviceTier,
+        ip: d.network.ip,
+        port: (d.deviceTier === 'thick_mobile' && (!d.network.port || d.network.port === 8082)) ? 8765 : (d.network.port || 8080),
+        sharedToken: d.meshToken,
+        isOnline: activeSockets.has(d.deviceId),
+    }));
+    res.json({ peers });
+});
+
+// Replace the /api/mesh/cluster/sync route in desktop-daemon/src/server.ts:
+
+app.post('/api/mesh/cluster/sync', (_req, res) => {
+    console.log(`[Cluster Sync] ⚡ Admin requested roster sync across ${activeSockets.size} active socket(s)...`);
+    broadcastPeerRoster();
+    console.log(`[Cluster Sync] ✅ Synced ${deviceStore.getAll().length} device(s) to cluster.`);
+    res.json({ status: 'SYNC_DISPATCHED', connectedClients: activeSockets.size });
+});
+
+// 4. Paired Devices Management
 app.get('/api/mesh/devices', (_req, res) => {
     const devices = deviceStore.getAll().map((dev) => ({
         ...dev,
@@ -137,16 +195,16 @@ app.post('/api/mesh/devices/revoke', (req, res) => {
         activeSocket.terminate();
         activeSockets.delete(deviceId);
     }
+    broadcastPeerRoster();
     res.json({ status: 'REVOKED', deviceId });
 });
 
-// 4. Ollama Telemetry Routes
+// 5. Ollama Telemetry Routes
 app.get('/api/mesh/telemetry', async (_req, res) => {
     const gpu = await telemetryService.getGpuStats();
     const systemRam = telemetryService.getSystemRamStats();
     const models = await ollama.listModels();
 
-    // Query Ollama's active model status
     let ollamaAllocation = {
         name: null,
         totalBytes: 0,
@@ -171,7 +229,7 @@ app.get('/api/mesh/telemetry', async (_req, res) => {
     });
 });
 
-// 4b. HTTP Streaming Inference Fallback
+// 5b. HTTP Streaming Inference Fallback
 app.post('/api/mesh/chat', async (req, res) => {
     const authHeader = req.headers.authorization;
     const token = authHeader?.replace('Bearer ', '') || (req.query.token as string);
@@ -202,14 +260,7 @@ app.post('/api/mesh/chat', async (req, res) => {
     }
 });
 
-// 5. WebSocket Authentication & Heartbeat Pipeline
-const lastHeartbeatMap = new Map<string, number>();
-
-function normalizeIp(rawIp: string | undefined): string {
-    if (!rawIp) return 'unknown';
-    return rawIp.replace('::ffff:', '');
-}
-
+// 6. WebSocket Authentication & Heartbeat Pipeline
 wss.on('connection', (ws, req) => {
     const url = new URL(req.url || '', `http://${req.headers.host}`);
     const token = url.searchParams.get('token');
@@ -226,21 +277,40 @@ wss.on('connection', (ws, req) => {
     }
 
     const { deviceId } = device;
-
-    // Refresh client IP dynamically on each new connection
     const currentIp = normalizeIp(req.socket.remoteAddress);
     device.network.ip = currentIp;
+    if (device.deviceTier === 'thick_mobile' && (!device.network.port || device.network.port === 8082)) {
+        device.network.port = 8765;
+    }
     deviceStore.upsert(device);
 
     activeSockets.set(deviceId, ws);
     lastHeartbeatMap.set(deviceId, Date.now());
 
-    console.log(`[Mesh Socket] Connected: ${device.deviceName} (${deviceId}) from IP: ${currentIp}`);
+    console.log(`[Mesh Socket] 🟢 Online: ${device.deviceName} (${deviceId}) from IP: ${currentIp}`);
+
+    // Immediately push complete cluster roster to newly connected device
+    const peers = deviceStore.getAll().filter((d) => !d.isRevoked);
+    ws.send(
+        JSON.stringify({
+            jsonrpc: '2.0',
+            method: 'mcp.peer_sync',
+            params: {
+                peers: peers.map((d) => ({
+                    nodeId: d.deviceId,
+                    nodeName: d.deviceName,
+                    deviceTier: d.deviceTier,
+                    ip: d.network.ip,
+                    port: (d.deviceTier === 'thick_mobile' && (!d.network.port || d.network.port === 8082)) ? 8765 : (d.network.port || 8080),
+                    sharedToken: d.meshToken,
+                })),
+            },
+        })
+    );
 
     ws.on('message', async (data) => {
         const raw = data.toString();
 
-        // Heartbeat handling
         try {
             const parsed = JSON.parse(raw);
             if (parsed.type === 'ping') {
@@ -267,7 +337,7 @@ wss.on('connection', (ws, req) => {
     const cleanup = () => {
         activeSockets.delete(deviceId);
         lastHeartbeatMap.delete(deviceId);
-        console.log(`[Mesh Socket] Disconnected: ${deviceId}`);
+        console.log(`[Mesh Socket] 🔴 Disconnected: ${device.deviceName} (${deviceId})`);
     };
 
     ws.on('close', cleanup);
@@ -277,7 +347,6 @@ wss.on('connection', (ws, req) => {
     });
 });
 
-// If a client misses 2 consecutive pings (>12s), terminate the dead socket
 setInterval(() => {
     const now = Date.now();
     for (const [deviceId, lastSeen] of lastHeartbeatMap.entries()) {

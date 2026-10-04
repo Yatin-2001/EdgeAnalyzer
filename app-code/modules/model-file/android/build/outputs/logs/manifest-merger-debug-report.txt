@@ -1,20 +1,21 @@
 -- Merging decision tree log ---
 manifest
-ADDED from C:\Users\gupta\Desktop\EdgeAnaLyzer\app-code\modules\model-file\android\src\main\AndroidManifest.xml:1:1-25:12
-INJECTED from C:\Users\gupta\Desktop\EdgeAnaLyzer\app-code\modules\model-file\android\src\main\AndroidManifest.xml:1:1-25:12
+ADDED from C:\Users\gupta\Desktop\EdgeAnaLyzer\app-code\modules\model-file\android\src\main\AndroidManifest.xml:1:1-21:12
+INJECTED from C:\Users\gupta\Desktop\EdgeAnaLyzer\app-code\modules\model-file\android\src\main\AndroidManifest.xml:1:1-21:12
 	package
-		ADDED from C:\Users\gupta\Desktop\EdgeAnaLyzer\app-code\modules\model-file\android\src\main\AndroidManifest.xml:2:11-43
 		INJECTED from C:\Users\gupta\Desktop\EdgeAnaLyzer\app-code\modules\model-file\android\src\main\AndroidManifest.xml
+	xmlns:tools
+		ADDED from C:\Users\gupta\Desktop\EdgeAnaLyzer\app-code\modules\model-file\android\src\main\AndroidManifest.xml:2:5-51
 	xmlns:android
 		ADDED from C:\Users\gupta\Desktop\EdgeAnaLyzer\app-code\modules\model-file\android\src\main\AndroidManifest.xml:1:11-69
 uses-permission#android.permission.FOREGROUND_SERVICE
 ADDED from C:\Users\gupta\Desktop\EdgeAnaLyzer\app-code\modules\model-file\android\src\main\AndroidManifest.xml:4:5-77
 	android:name
 		ADDED from C:\Users\gupta\Desktop\EdgeAnaLyzer\app-code\modules\model-file\android\src\main\AndroidManifest.xml:4:22-74
-uses-permission#android.permission.FOREGROUND_SERVICE_SPECIAL_USE
-ADDED from C:\Users\gupta\Desktop\EdgeAnaLyzer\app-code\modules\model-file\android\src\main\AndroidManifest.xml:5:5-89
+uses-permission#android.permission.FOREGROUND_SERVICE_DATA_SYNC
+ADDED from C:\Users\gupta\Desktop\EdgeAnaLyzer\app-code\modules\model-file\android\src\main\AndroidManifest.xml:5:5-87
 	android:name
-		ADDED from C:\Users\gupta\Desktop\EdgeAnaLyzer\app-code\modules\model-file\android\src\main\AndroidManifest.xml:5:22-86
+		ADDED from C:\Users\gupta\Desktop\EdgeAnaLyzer\app-code\modules\model-file\android\src\main\AndroidManifest.xml:5:22-84
 uses-permission#android.permission.WAKE_LOCK
 ADDED from C:\Users\gupta\Desktop\EdgeAnaLyzer\app-code\modules\model-file\android\src\main\AndroidManifest.xml:6:5-68
 	android:name
@@ -28,27 +29,21 @@ ADDED from C:\Users\gupta\Desktop\EdgeAnaLyzer\app-code\modules\model-file\andro
 	android:name
 		ADDED from C:\Users\gupta\Desktop\EdgeAnaLyzer\app-code\modules\model-file\android\src\main\AndroidManifest.xml:8:22-83
 application
-ADDED from C:\Users\gupta\Desktop\EdgeAnaLyzer\app-code\modules\model-file\android\src\main\AndroidManifest.xml:10:5-24:19
+ADDED from C:\Users\gupta\Desktop\EdgeAnaLyzer\app-code\modules\model-file\android\src\main\AndroidManifest.xml:10:5-20:19
 uses-native-library
-ADDED from C:\Users\gupta\Desktop\EdgeAnaLyzer\app-code\modules\model-file\android\src\main\AndroidManifest.xml:12:9-14:44
+ADDED from C:\Users\gupta\Desktop\EdgeAnaLyzer\app-code\modules\model-file\android\src\main\AndroidManifest.xml:12:9-14:40
 	android:required
-		ADDED from C:\Users\gupta\Desktop\EdgeAnaLyzer\app-code\modules\model-file\android\src\main\AndroidManifest.xml:14:17-41
+		ADDED from C:\Users\gupta\Desktop\EdgeAnaLyzer\app-code\modules\model-file\android\src\main\AndroidManifest.xml:14:13-37
 	android:name
-		ADDED from C:\Users\gupta\Desktop\EdgeAnaLyzer\app-code\modules\model-file\android\src\main\AndroidManifest.xml:13:17-44
+		ADDED from C:\Users\gupta\Desktop\EdgeAnaLyzer\app-code\modules\model-file\android\src\main\AndroidManifest.xml:13:13-40
 service#expo.modules.modelfile.EdgeComputeWorkerService
-ADDED from C:\Users\gupta\Desktop\EdgeAnaLyzer\app-code\modules\model-file\android\src\main\AndroidManifest.xml:16:9-23:19
+ADDED from C:\Users\gupta\Desktop\EdgeAnaLyzer\app-code\modules\model-file\android\src\main\AndroidManifest.xml:16:9-19:40
 	android:exported
-		ADDED from C:\Users\gupta\Desktop\EdgeAnaLyzer\app-code\modules\model-file\android\src\main\AndroidManifest.xml:19:17-41
+		ADDED from C:\Users\gupta\Desktop\EdgeAnaLyzer\app-code\modules\model-file\android\src\main\AndroidManifest.xml:19:13-37
 	android:foregroundServiceType
-		ADDED from C:\Users\gupta\Desktop\EdgeAnaLyzer\app-code\modules\model-file\android\src\main\AndroidManifest.xml:18:17-59
+		ADDED from C:\Users\gupta\Desktop\EdgeAnaLyzer\app-code\modules\model-file\android\src\main\AndroidManifest.xml:18:13-53
 	android:name
-		ADDED from C:\Users\gupta\Desktop\EdgeAnaLyzer\app-code\modules\model-file\android\src\main\AndroidManifest.xml:17:17-79
-property#android.app.PROPERTY_SPECIAL_USE_FGS_SUBTYPE
-ADDED from C:\Users\gupta\Desktop\EdgeAnaLyzer\app-code\modules\model-file\android\src\main\AndroidManifest.xml:20:13-22:80
-	android:value
-		ADDED from C:\Users\gupta\Desktop\EdgeAnaLyzer\app-code\modules\model-file\android\src\main\AndroidManifest.xml:22:21-77
-	android:name
-		ADDED from C:\Users\gupta\Desktop\EdgeAnaLyzer\app-code\modules\model-file\android\src\main\AndroidManifest.xml:21:21-80
+		ADDED from C:\Users\gupta\Desktop\EdgeAnaLyzer\app-code\modules\model-file\android\src\main\AndroidManifest.xml:17:13-75
 uses-sdk
 INJECTED from C:\Users\gupta\Desktop\EdgeAnaLyzer\app-code\modules\model-file\android\src\main\AndroidManifest.xml reason: use-sdk injection requested
 INJECTED from C:\Users\gupta\Desktop\EdgeAnaLyzer\app-code\modules\model-file\android\src\main\AndroidManifest.xml

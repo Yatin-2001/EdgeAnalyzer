@@ -80,5 +80,16 @@ export function useMeshAdmin() {
         await fetchData();
     };
 
-    return { devices, models, gpu, systemRam, ollama, revokeDevice, refresh: fetchData };
+    const syncMeshRoster = async () => {
+        try {
+            const res = await fetch('/api/mesh/cluster/sync', { method: 'POST' });
+            if (res.ok) {
+                await fetchData();
+            }
+        } catch (err) {
+            console.error('[Admin Hook] Failed to trigger mesh sync:', err);
+        }
+    };
+
+    return { devices, models, gpu, systemRam, ollama, revokeDevice, syncMeshRoster, refresh: fetchData };
 }
