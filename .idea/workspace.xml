@@ -5,7 +5,6 @@
   </component>
   <component name="ChangeListManager">
     <list default="true" id="a200b66f-9d5e-4280-b810-e185de6677ab" name="Changes" comment="">
-      <change beforePath="$PROJECT_DIR$/.idea/caches/deviceStreaming.xml" beforeDir="false" afterPath="$PROJECT_DIR$/.idea/caches/deviceStreaming.xml" afterDir="false" />
       <change beforePath="$PROJECT_DIR$/.idea/workspace.xml" beforeDir="false" afterPath="$PROJECT_DIR$/.idea/workspace.xml" afterDir="false" />
     </list>
     <option name="SHOW_DIALOG" value="false" />
@@ -66,7 +65,7 @@
     "node.js.selected.package.tslint": "(autodetect)",
     "nodejs_package_manager_path": "npm",
     "settings.editor.selected.configurable": "SQL Dialects",
-    "ts.external.directory.path": "C:\\Program Files\\JetBrains\\WebStorm 2026.2.1\\plugins\\javascript-plugin\\jsLanguageServicesImpl\\external"
+    "ts.external.directory.path": "C:\\Users\\gupta\\Desktop\\EdgeAnaLyzer\\desktop-daemon\\admin-ui\\node_modules\\typescript\\lib"
   }
 }]]></component>
   <component name="SharedIndexes">
@@ -115,6 +114,66 @@
   </component>
   <component name="TypeScriptGeneratedFilesManager">
     <option name="version" value="3" />
+    <option name="exactExcludedFiles">
+      <list>
+        <option value="$PROJECT_DIR$/desktop-daemon/src/server.js.map" />
+        <option value="$PROJECT_DIR$/desktop-daemon/src/server.d.ts" />
+        <option value="$PROJECT_DIR$/desktop-daemon/src/server.d.ts.map" />
+        <option value="$PROJECT_DIR$/desktop-daemon/src/server.js" />
+        <option value="$PROJECT_DIR$/desktop-daemon/admin-ui/vite.config.js.map" />
+        <option value="$PROJECT_DIR$/desktop-daemon/admin-ui/vite.config.d.ts" />
+        <option value="$PROJECT_DIR$/desktop-daemon/admin-ui/vite.config.d.ts.map" />
+        <option value="$PROJECT_DIR$/desktop-daemon/admin-ui/vite.config.js" />
+        <option value="$PROJECT_DIR$/desktop-daemon/src/mcp/MCPProtocol.d.ts.map" />
+        <option value="$PROJECT_DIR$/desktop-daemon/src/mcp/MCPProtocol.js.map" />
+        <option value="$PROJECT_DIR$/desktop-daemon/src/mcp/OllamaBridge.js.map" />
+        <option value="$PROJECT_DIR$/desktop-daemon/src/mcp/OllamaBridge.d.ts.map" />
+        <option value="$PROJECT_DIR$/desktop-daemon/src/mcp/OllamaBridge.js" />
+        <option value="$PROJECT_DIR$/desktop-daemon/src/mcp/MCPProtocol.js" />
+        <option value="$PROJECT_DIR$/desktop-daemon/src/mcp/MCPProtocol.d.ts" />
+        <option value="$PROJECT_DIR$/desktop-daemon/src/mcp/OllamaBridge.d.ts" />
+        <option value="$PROJECT_DIR$/desktop-daemon/src/mesh/DiscoveryService.d.ts.map" />
+        <option value="$PROJECT_DIR$/desktop-daemon/src/mesh/DeviceStore.d.ts" />
+        <option value="$PROJECT_DIR$/desktop-daemon/src/mesh/SystemTelemetry.js.map" />
+        <option value="$PROJECT_DIR$/desktop-daemon/src/mesh/PairingManager.d.ts" />
+        <option value="$PROJECT_DIR$/desktop-daemon/src/mesh/DeviceStore.js" />
+        <option value="$PROJECT_DIR$/desktop-daemon/src/mesh/DeviceStore.js.map" />
+        <option value="$PROJECT_DIR$/desktop-daemon/src/mesh/SystemTelemetry.js" />
+        <option value="$PROJECT_DIR$/desktop-daemon/src/mesh/PairingManager.js.map" />
+        <option value="$PROJECT_DIR$/desktop-daemon/src/mesh/DiscoveryService.js" />
+        <option value="$PROJECT_DIR$/desktop-daemon/src/mesh/DiscoveryService.d.ts" />
+        <option value="$PROJECT_DIR$/desktop-daemon/src/mesh/DeviceStore.d.ts.map" />
+        <option value="$PROJECT_DIR$/desktop-daemon/src/mesh/DiscoveryService.js.map" />
+        <option value="$PROJECT_DIR$/desktop-daemon/src/mesh/PairingManager.js" />
+        <option value="$PROJECT_DIR$/desktop-daemon/src/mesh/PairingManager.d.ts.map" />
+        <option value="$PROJECT_DIR$/desktop-daemon/src/mesh/SystemTelemetry.d.ts.map" />
+        <option value="$PROJECT_DIR$/desktop-daemon/src/mesh/SystemTelemetry.d.ts" />
+        <option value="$PROJECT_DIR$/desktop-daemon/admin-ui/src/App.d.ts.map" />
+        <option value="$PROJECT_DIR$/desktop-daemon/admin-ui/src/main.d.ts" />
+        <option value="$PROJECT_DIR$/desktop-daemon/admin-ui/src/App.d.ts" />
+        <option value="$PROJECT_DIR$/desktop-daemon/admin-ui/src/App.js" />
+        <option value="$PROJECT_DIR$/desktop-daemon/admin-ui/src/main.js.map" />
+        <option value="$PROJECT_DIR$/desktop-daemon/admin-ui/src/App.js.map" />
+        <option value="$PROJECT_DIR$/desktop-daemon/admin-ui/src/main.d.ts.map" />
+        <option value="$PROJECT_DIR$/desktop-daemon/admin-ui/src/main.js" />
+        <option value="$PROJECT_DIR$/desktop-daemon/admin-ui/src/hooks/useMeshAdmin.js" />
+        <option value="$PROJECT_DIR$/desktop-daemon/admin-ui/src/hooks/useMeshAdmin.d.ts" />
+        <option value="$PROJECT_DIR$/desktop-daemon/admin-ui/src/hooks/useMeshAdmin.d.ts.map" />
+        <option value="$PROJECT_DIR$/desktop-daemon/admin-ui/src/hooks/useMeshAdmin.js.map" />
+        <option value="$PROJECT_DIR$/desktop-daemon/admin-ui/src/components/OllamaModelShelf.js.map" />
+        <option value="$PROJECT_DIR$/desktop-daemon/admin-ui/src/components/DeviceTable.js.map" />
+        <option value="$PROJECT_DIR$/desktop-daemon/admin-ui/src/components/OllamaModelShelf.js" />
+        <option value="$PROJECT_DIR$/desktop-daemon/admin-ui/src/components/PairingModal.js.map" />
+        <option value="$PROJECT_DIR$/desktop-daemon/admin-ui/src/components/PairingModal.d.ts.map" />
+        <option value="$PROJECT_DIR$/desktop-daemon/admin-ui/src/components/OllamaModelShelf.d.ts.map" />
+        <option value="$PROJECT_DIR$/desktop-daemon/admin-ui/src/components/OllamaModelShelf.d.ts" />
+        <option value="$PROJECT_DIR$/desktop-daemon/admin-ui/src/components/DeviceTable.js" />
+        <option value="$PROJECT_DIR$/desktop-daemon/admin-ui/src/components/DeviceTable.d.ts.map" />
+        <option value="$PROJECT_DIR$/desktop-daemon/admin-ui/src/components/PairingModal.d.ts" />
+        <option value="$PROJECT_DIR$/desktop-daemon/admin-ui/src/components/PairingModal.js" />
+        <option value="$PROJECT_DIR$/desktop-daemon/admin-ui/src/components/DeviceTable.d.ts" />
+      </list>
+    </option>
   </component>
   <component name="UnknownFeatures">
     <option featureType="com.intellij.fileTypeFactory" implementationName="*.ts" />

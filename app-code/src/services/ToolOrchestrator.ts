@@ -57,7 +57,7 @@ export class ToolOrchestrator {
             `2. For current facts, YouTube channels, links, video info, currency rates, or search, use: web_search\n` +
             `3. For ANY math, arithmetic, or computation, you MUST call: calculator\n` +
             `4. For device coordinates (e.g. "where am I"), use: device_location\n` +
-            `5. For ANY weather query, you MUST call: weather\n` +
+            `5. For ANY weather query, you MUST call: weather. If no specific city is requested by the user, you MUST set "location": "current_location".\n` +
             `6. Output ONLY a raw JSON call when invoking a tool:\n` +
             `{"tool": "<tool_name>", "parameters": {<key>: <value>}}\n\n` +
             `### EXAMPLES:\n` +

@@ -18,5 +18,7 @@
     "moduleDetection": "force",
     "skipLibCheck": true,
     "allowSyntheticDefaultImports": true
-  }
+  },
+  "include": ["src/**/*.ts"],
+  "exclude": ["node_modules", "admin-ui"]
 }

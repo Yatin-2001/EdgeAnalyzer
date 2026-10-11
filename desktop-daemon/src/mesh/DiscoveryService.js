@@ -1,0 +1,38 @@
+import { Bonjour } from 'bonjour-service';
+import os from 'node:os';
+export class DiscoveryService {
+    static instance;
+    bonjour = null;
+    constructor() { }
+    static getInstance() {
+        if (!DiscoveryService.instance) {
+            DiscoveryService.instance = new DiscoveryService();
+        }
+        return DiscoveryService.instance;
+    }
+    start(port) {
+        if (this.bonjour)
+            return;
+        this.bonjour = new Bonjour();
+        this.bonjour.publish({
+            name: `EdgeAnalyzer-Desktop-${os.hostname()}`,
+            type: 'edgeanalyzer-mcp',
+            port,
+            txt: {
+                nodeType: 'thick_desktop',
+                gpu: 'RTX 3060',
+                protocols: 'ws,mcp',
+            },
+        });
+        console.log(`[mDNS] Broadcasting _edgeanalyzer-mcp._tcp.local on port ${port}`);
+    }
+    stop() {
+        if (this.bonjour) {
+            this.bonjour.unpublishAll(() => {
+                this.bonjour?.destroy();
+                this.bonjour = null;
+            });
+        }
+    }
+}
+//# sourceMappingURL=DiscoveryService.js.map

@@ -1,4 +1,5 @@
 import { Bonjour } from 'bonjour-service';
+import os from 'node:os';
 
 export class DiscoveryService {
     private static instance: DiscoveryService;
@@ -17,7 +18,7 @@ export class DiscoveryService {
         if (this.bonjour) return;
         this.bonjour = new Bonjour();
         this.bonjour.publish({
-            name: `EdgeAnalyzer-Desktop-${require('os').hostname()}`,
+            name: `EdgeAnalyzer-Desktop-${os.hostname()}`,
             type: 'edgeanalyzer-mcp',
             port,
             txt: {

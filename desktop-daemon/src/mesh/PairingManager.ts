@@ -1,13 +1,17 @@
 import crypto from 'crypto';
 import fs from 'fs';
-import path from 'path';
-import { DeviceStore, type MeshDeviceMetadata } from './DeviceStore';
+import path from 'node:path';
+import { fileURLToPath } from 'node:url';
+import { DeviceStore, type MeshDeviceMetadata } from './DeviceStore.js';
 
 interface ActivePinSession {
     pin: string;
     expiresAt: number;
     hmacSecret: string;
 }
+
+const __filename = fileURLToPath(import.meta.url);
+const __dirname = path.dirname(__filename);
 
 export class PairingManager {
     private static instance: PairingManager;

@@ -36,20 +36,94 @@ export class OllamaBridge {
         }
     }
 
+    /**
+     * Unpacks pre-templated prompt strings (Llama-3 or ChatML) into standard structured
+     * messages so Ollama's /api/chat can apply the target model's native template.
+     */
+    private unpackTemplatedPrompt(rawPrompt: string): Array<{ role: string; content: string }> {
+        const messages: Array<{ role: string; content: string }> = [];
+
+        if (rawPrompt.includes('<|start_header_id|>')) {
+            // Llama-3 delimiter format
+            const regex = /<\|start_header_id\|>(system|user|assistant|tool)<\|end_header_id\|>([\s\S]*?)(?=<\|start_header_id\|>|<\|eot_id\|>|$)/g;
+            let match: RegExpExecArray | null;
+            while ((match = regex.exec(rawPrompt)) !== null) {
+                const rawRole = match[1];
+                const rawContent = match[2];
+                if (!rawRole || rawContent === undefined) continue;
+
+                const content = rawContent.replace(/<\|eot_id\|>/g, '').trim();
+                if (content.length > 0) {
+                    messages.push({
+                        role: rawRole === 'tool' ? 'user' : rawRole,
+                        content,
+                    });
+                }
+            }
+        } else if (rawPrompt.includes('<|im_start|>')) {
+            // ChatML delimiter format
+            const regex = /<\|im_start\|>(system|user|assistant|tool)\n?([\s\S]*?)(?=<\|im_start\|>|<\|im_end\|>|$)/g;
+            let match: RegExpExecArray | null;
+            while ((match = regex.exec(rawPrompt)) !== null) {
+                const rawRole = match[1];
+                const rawContent = match[2];
+                if (!rawRole || rawContent === undefined) continue;
+
+                const content = rawContent.replace(/<\|im_end\|>/g, '').trim();
+                if (content.length > 0) {
+                    messages.push({
+                        role: rawRole === 'tool' ? 'user' : rawRole,
+                        content,
+                    });
+                }
+            }
+        }
+
+        // Fallback: If no markers found, treat entire string as single user message
+        if (messages.length === 0 && rawPrompt.trim().length > 0) {
+            messages.push({ role: 'user', content: rawPrompt.trim() });
+        }
+
+        return messages;
+    }
+
     public async streamChat(
         model: string,
         messages: Array<{ role: string; content: string; images?: string[] }>,
         onChunk: (text: string) => void
     ): Promise<void> {
-        console.log(`[OllamaBridge] 🚀 Dispatching prompt to model "${model}" (${messages.length} messages)`);
+        let normalizedMessages = messages;
+
+        // If client wrapped a pre-templated string into a single user message, unpack it
+        if (messages.length === 1 && messages[0]?.content) {
+            const rawContent = messages[0].content;
+            if (rawContent.includes('<|start_header_id|>') || rawContent.includes('<|im_start|>')) {
+                normalizedMessages = this.unpackTemplatedPrompt(rawContent);
+                console.log(
+                    `[OllamaBridge] 🔄 Unpacked ${rawContent.length} raw chars into ${normalizedMessages.length} structured chat message(s) for "${model}"`
+                );
+            }
+        }
+
+        console.log(`[OllamaBridge] 🚀 Dispatching prompt to model "${model}" (${normalizedMessages.length} messages) via /api/chat`);
 
         const res = await fetch(`${this.baseUrl}/api/chat`, {
             method: 'POST',
             headers: { 'Content-Type': 'application/json' },
             body: JSON.stringify({
                 model,
-                messages,
+                messages: normalizedMessages,
                 stream: true,
+                options: {
+                    // Universal stop tokens to prevent runaway streams on any model
+                    stop: [
+                        '<|eot_id|>',
+                        '<|end_of_text|>',
+                        '<|end|>',
+                        '<|im_end|>',
+                        '</s>',
+                    ],
+                },
             }),
         });
 
@@ -85,7 +159,7 @@ export class OllamaBridge {
                         onChunk(parsed.message.content);
                     }
                 } catch {
-                    // ignore partial fragments
+                    // Ignore partial JSON fragments
                 }
             }
         }

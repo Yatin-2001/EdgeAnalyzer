@@ -1,13 +1,15 @@
 import { useState } from 'react';
 import { useMeshAdmin } from './hooks/useMeshAdmin';
 import { PairingModal } from './components/PairingModal';
+import { LinkNodeModal } from './components/LinkNodeModal';
 import { DeviceTable } from './components/DeviceTable';
 import { OllamaModelShelf } from './components/OllamaModelShelf';
-import { Network, PlusCircle } from 'lucide-react';
+import { Network, PlusCircle, Link2 } from 'lucide-react';
 
 export default function App() {
   const { devices, models, gpu, systemRam, ollama, revokeDevice, syncMeshRoster } = useMeshAdmin();
   const [isPairingOpen, setPairingOpen] = useState(false);
+  const [isLinkOpen, setLinkOpen] = useState(false);
 
   return (
       <div className="min-h-screen bg-slate-950 text-slate-50 p-8 font-sans">
@@ -31,6 +33,13 @@ export default function App() {
                 ⚡ Sync Mesh Roster
               </button>
               <button
+                  onClick={() => setLinkOpen(true)}
+                  className="flex items-center gap-2 bg-slate-800 hover:bg-slate-700 text-slate-200 border border-slate-700 text-sm font-medium px-4 py-2.5 rounded-xl transition"
+              >
+                <Link2 className="w-4 h-4 text-indigo-400" />
+                Link Desktop Node
+              </button>
+              <button
                   onClick={() => setPairingOpen(true)}
                   className="flex items-center gap-2 bg-indigo-600 hover:bg-indigo-500 text-white text-sm font-medium px-4 py-2.5 rounded-xl shadow-lg transition"
               >
@@ -45,6 +54,7 @@ export default function App() {
         </div>
 
         <PairingModal isOpen={isPairingOpen} onClose={() => setPairingOpen(false)} />
+        <LinkNodeModal isOpen={isLinkOpen} onClose={() => setLinkOpen(false)} onSuccess={syncMeshRoster} />
       </div>
   );
 }

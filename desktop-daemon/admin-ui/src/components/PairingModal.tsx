@@ -15,7 +15,7 @@ export const PairingModal: React.FC<Props> = ({ isOpen, onClose }) => {
     const [loading, setLoading] = useState<boolean>(false);
     const [error, setError] = useState<string | null>(null);
 
-    const timerRef = useRef<NodeJS.Timeout | null>(null);
+    const timerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
 
     const fetchPin = async () => {
         setLoading(true);

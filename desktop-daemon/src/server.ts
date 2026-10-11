@@ -1,8 +1,9 @@
+import path from 'node:path';
+import { fileURLToPath } from 'node:url';
 import express from 'express';
 import http from 'http';
 import { WebSocketServer, WebSocket } from 'ws';
 import cors from 'cors';
-import path from 'path';
 import os from 'os';
 import { DeviceStore } from './mesh/DeviceStore.js';
 import { PairingManager } from './mesh/PairingManager.js';
@@ -10,6 +11,8 @@ import { DiscoveryService } from './mesh/DiscoveryService.js';
 import { OllamaBridge } from './mcp/OllamaBridge.js';
 import { MCPProtocol } from './mcp/MCPProtocol.js';
 import { SystemTelemetry } from './mesh/SystemTelemetry.js';
+import type { OllamaModelAllocation } from './mesh/SystemTelemetry.js';
+import type { MeshDeviceMetadata } from './mesh/DeviceStore.js';
 
 const PORT = 8080;
 const app = express();
@@ -36,6 +39,9 @@ function normalizeIp(rawIp: string | undefined): string {
     return rawIp.replace('::ffff:', '');
 }
 
+const __filename = fileURLToPath(import.meta.url);
+const __dirname = path.dirname(__filename);
+
 const adminDistPath = path.resolve(__dirname, '../admin-ui/dist');
 app.use(express.static(adminDistPath));
 
@@ -48,6 +54,45 @@ const telemetryService = SystemTelemetry.getInstance();
 
 const activeSockets = new Map<string, WebSocket>();
 const lastHeartbeatMap = new Map<string, number>();
+const peerDaemonSockets = new Map<string, WebSocket>();
+
+const LOCAL_NODE_ID = `desktop_${os.hostname().toLowerCase().replace(/[^a-z0-9]/g, '_')}`;
+
+// Helper: Merge an incoming roster into local DeviceStore (Deduplicated RA ∪ RB)
+function mergeClusterRoster(incomingRoster: any[]): void {
+    if (!Array.isArray(incomingRoster)) return;
+
+    for (const incoming of incomingRoster) {
+        const id = incoming.deviceId || incoming.nodeId;
+        if (!id || id === LOCAL_NODE_ID) continue;
+
+        const existing = deviceStore.get ? deviceStore.get(id) : deviceStore.getAll().find((d) => d.deviceId === id);
+        const resolvedPort =
+            incoming.deviceTier === 'thick_mobile' && (!incoming.network?.port || incoming.network.port === 8082)
+                ? 8765
+                : (incoming.network?.port || incoming.port || (incoming.deviceTier === 'thick_desktop' ? 8080 : 0));
+
+        const merged: MeshDeviceMetadata = {
+            deviceId: id,
+            deviceName: incoming.deviceName || incoming.nodeName || 'Remote Peer',
+            deviceTier: incoming.deviceTier || 'thick_mobile',
+            network: {
+                ip: incoming.network?.ip || incoming.ip || '127.0.0.1',
+                port: resolvedPort,
+            },
+            capabilities: incoming.capabilities || {
+                canRunInference: incoming.deviceTier !== 'thin',
+                activeModality: 'both',
+                maxContextTokens: 4096,
+            },
+            meshToken: incoming.meshToken || incoming.sharedToken || existing?.meshToken || '',
+            pairedAt: incoming.pairedAt || Date.now(),
+            isRevoked: false,
+        };
+
+        deviceStore.upsert(merged);
+    }
+}
 
 // Helper: Broadcast peer sync payload to all active devices
 function broadcastPeerRoster(): void {
@@ -68,6 +113,13 @@ function broadcastPeerRoster(): void {
     });
 
     for (const [_, socket] of activeSockets.entries()) {
+        if (socket.readyState === WebSocket.OPEN) {
+            socket.send(syncPayload);
+        }
+    }
+
+    // Also gossip to connected peer desktop daemons
+    for (const [_, socket] of peerDaemonSockets.entries()) {
         if (socket.readyState === WebSocket.OPEN) {
             socket.send(syncPayload);
         }
@@ -96,16 +148,15 @@ app.get('/api/mesh/pin/status', (_req, res) => {
     });
 });
 
-// 2. Handshake Pairing Route
+// 2. Handshake Pairing Route (Supports both Mobile Clients and Desktop Federation)
 app.post('/api/mesh/pair', (req, res) => {
-    const { pin, deviceId, deviceName, deviceTier, capabilities } = req.body;
+    const { pin, deviceId, deviceName, deviceTier, capabilities, clusterRoster } = req.body;
     if (!pin || !deviceId || !deviceName || !deviceTier) {
         return res.status(400).json({ error: 'MISSING_FIELDS' });
     }
 
     try {
         const clientIp = normalizeIp(req.socket.remoteAddress);
-        // Default thick_mobile to port 8082, desktop to 8080
         const designatedPort = deviceTier === 'thick_mobile' ? 8765 : (deviceTier === 'thick_desktop' ? PORT : 0);
 
         const { meshToken, clusterSecret, knownPeers } = pairingManager.verifyAndRegisterDevice(pin, {
@@ -114,13 +165,18 @@ app.post('/api/mesh/pair', (req, res) => {
             deviceTier,
             network: { ip: clientIp, port: designatedPort },
             capabilities: capabilities || {
-                canRunInference: deviceTier === 'thick_mobile',
+                canRunInference: deviceTier !== 'thin',
                 activeModality: 'both',
                 maxContextTokens: 4096,
             },
         });
 
-        // Broadcast single peer announcement with port
+        // If another desktop is pairing, perform Roster Union on our side
+        if (deviceTier === 'thick_desktop' && Array.isArray(clusterRoster)) {
+            mergeClusterRoster(clusterRoster);
+            console.log(`[Mesh Federation] Ingested ${clusterRoster.length} devices from peer desktop: ${deviceName}`);
+        }
+
         const newPeerAnnouncement = JSON.stringify({
             jsonrpc: '2.0',
             method: 'mcp.peer_joined',
@@ -140,16 +196,119 @@ app.post('/api/mesh/pair', (req, res) => {
             }
         }
 
+        // Return our full local roster to the remote desktop so it can complete the union
+        const fullLocalRoster = deviceStore.getAll().filter((d) => !d.isRevoked);
+
         res.json({
             status: 'PAIRED',
             meshToken,
             clusterSecret,
-            peerNodeId: `desktop_${os.hostname()}`,
+            peerNodeId: LOCAL_NODE_ID,
             peerName: `Desktop (${os.hostname()})`,
-            knownPeers,
+            knownPeers: fullLocalRoster,
         });
+
+        // Broadcast updated union to all local phones
+        broadcastPeerRoster();
     } catch (err: any) {
         res.status(401).json({ error: err.message });
+    }
+});
+
+// 2b. Outbound Federation Endpoint (Triggered from Admin UI)
+app.post('/api/mesh/cluster/join', async (req, res) => {
+    const { targetIp, targetPort, pin } = req.body;
+    if (!targetIp || !pin) {
+        return res.status(400).json({ error: 'TARGET_IP_AND_PIN_REQUIRED' });
+    }
+
+    const remotePort = targetPort || 8080;
+
+    try {
+        console.log(`[Mesh Federation] Initiating outbound federation to http://${targetIp}:${remotePort}...`);
+
+        // Send our local identity and complete roster to the remote desktop
+        const localRoster = deviceStore.getAll().filter((d) => !d.isRevoked);
+        const joinRes = await fetch(`http://${targetIp}:${remotePort}/api/mesh/pair`, {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({
+                pin,
+                deviceId: LOCAL_NODE_ID,
+                deviceName: `Desktop (${os.hostname()})`,
+                deviceTier: 'thick_desktop',
+                clusterRoster: localRoster,
+            }),
+        });
+
+        if (!joinRes.ok) {
+            const err = await joinRes.json().catch(() => ({}));
+            return res.status(joinRes.status).json({ error: err.error || `Federation rejected (HTTP ${joinRes.status})` });
+        }
+
+        const data = await joinRes.json();
+
+        // Register the remote desktop in our DeviceStore
+        deviceStore.upsert({
+            deviceId: data.peerNodeId || `desktop_${targetIp.replace(/\./g, '_')}`,
+            deviceName: data.peerName || `Desktop (${targetIp})`,
+            deviceTier: 'thick_desktop',
+            network: { ip: targetIp, port: remotePort },
+            capabilities: {
+                canRunInference: true,
+                activeModality: 'both',
+                maxContextTokens: 8192,
+                gpuAccelerator: 'CUDA',
+            },
+            meshToken: data.meshToken,
+            pairedAt: Date.now(),
+            isRevoked: false,
+        });
+
+        // Ingest the remote desktop's full roster (RA ∪ RB)
+        if (Array.isArray(data.knownPeers)) {
+            mergeClusterRoster(data.knownPeers);
+        }
+
+        // Establish persistent WebSocket link to the remote daemon for live gossip
+        const remoteWsUrl = `ws://${targetIp}:${remotePort}/mcp?token=${encodeURIComponent(data.meshToken)}`;
+        const remoteWs = new WebSocket(remoteWsUrl);
+
+        remoteWs.on('open', () => {
+            console.log(`[Mesh Federation] 🟢 Live inter-daemon socket open to ${targetIp}:${remotePort}`);
+            peerDaemonSockets.set(targetIp, remoteWs);
+        });
+
+        remoteWs.on('message', (msgData) => {
+            try {
+                const parsed = JSON.parse(msgData.toString());
+                if (parsed.method === 'mcp.peer_sync' && Array.isArray(parsed.params?.peers)) {
+                    mergeClusterRoster(parsed.params.peers);
+                    broadcastPeerRoster();
+                }
+            } catch {}
+        });
+
+        remoteWs.on('close', () => {
+            console.log(`[Mesh Federation] 🔴 Remote daemon link closed: ${targetIp}`);
+            peerDaemonSockets.delete(targetIp);
+        });
+
+        remoteWs.on('error', (err) => {
+            console.warn(`[Mesh Federation] Inter-daemon link error:`, err);
+        });
+
+        // Broadcast the united roster to all local phones
+        broadcastPeerRoster();
+
+        res.json({
+            success: true,
+            peerName: data.peerName,
+            unifiedDeviceCount: deviceStore.getAll().length,
+        });
+    } catch (err: any) {
+        console.error('[Mesh Federation Error]:', err);
+        res.status(500).json({ error: err.message || 'Failed to connect to remote desktop node' });
     }
 });
 
@@ -162,12 +321,10 @@ app.get('/api/mesh/cluster/peers', (_req, res) => {
         ip: d.network.ip,
         port: (d.deviceTier === 'thick_mobile' && (!d.network.port || d.network.port === 8082)) ? 8765 : (d.network.port || 8080),
         sharedToken: d.meshToken,
-        isOnline: activeSockets.has(d.deviceId),
+        isOnline: activeSockets.has(d.deviceId) || peerDaemonSockets.has(d.network.ip),
     }));
     res.json({ peers });
 });
-
-// Replace the /api/mesh/cluster/sync route in desktop-daemon/src/server.ts:
 
 app.post('/api/mesh/cluster/sync', (_req, res) => {
     console.log(`[Cluster Sync] ⚡ Admin requested roster sync across ${activeSockets.size} active socket(s)...`);
@@ -180,7 +337,7 @@ app.post('/api/mesh/cluster/sync', (_req, res) => {
 app.get('/api/mesh/devices', (_req, res) => {
     const devices = deviceStore.getAll().map((dev) => ({
         ...dev,
-        isOnline: activeSockets.has(dev.deviceId),
+        isOnline: activeSockets.has(dev.deviceId) || peerDaemonSockets.has(dev.network.ip),
     }));
     res.json({ devices });
 });
@@ -205,7 +362,7 @@ app.get('/api/mesh/telemetry', async (_req, res) => {
     const systemRam = telemetryService.getSystemRamStats();
     const models = await ollama.listModels();
 
-    let ollamaAllocation = {
+    let ollamaAllocation: OllamaModelAllocation = {
         name: null,
         totalBytes: 0,
         vramBytes: 0,
@@ -289,7 +446,6 @@ wss.on('connection', (ws, req) => {
 
     console.log(`[Mesh Socket] 🟢 Online: ${device.deviceName} (${deviceId}) from IP: ${currentIp}`);
 
-    // Immediately push complete cluster roster to newly connected device
     const peers = deviceStore.getAll().filter((d) => !d.isRevoked);
     ws.send(
         JSON.stringify({

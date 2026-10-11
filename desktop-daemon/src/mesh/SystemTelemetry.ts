@@ -48,12 +48,20 @@ export class SystemTelemetry {
             ]);
 
             const parts = stdout.trim().split(',').map((s) => s.trim());
+
             if (parts.length >= 4) {
+                const [name, total, used, free] = parts;
+
+                if (name === undefined || total === undefined ||
+                    used === undefined || free === undefined) {
+                    return null; // Use the appropriate fallback for your function.
+                }
+
                 return {
-                    name: parts[0],
-                    totalMB: parseFloat(parts[1]),
-                    usedMB: parseFloat(parts[2]),
-                    freeMB: parseFloat(parts[3]),
+                    name,
+                    totalMB: parseFloat(total),
+                    usedMB: parseFloat(used),
+                    freeMB: parseFloat(free),
                 };
             }
         } catch {

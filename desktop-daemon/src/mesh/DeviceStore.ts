@@ -1,5 +1,6 @@
 import fs from 'fs';
-import path from 'path';
+import path from 'node:path';
+import { fileURLToPath } from 'node:url';
 
 export type DeviceTier = 'thin' | 'thick_mobile' | 'thick_desktop';
 
@@ -28,6 +29,8 @@ export class DeviceStore {
     private devices: Map<string, MeshDeviceMetadata> = new Map();
 
     private constructor() {
+        const __filename = fileURLToPath(import.meta.url);
+        const __dirname = path.dirname(__filename);
         this.filePath = path.resolve(__dirname, '../../paired_devices.json');
         this.load();
     }

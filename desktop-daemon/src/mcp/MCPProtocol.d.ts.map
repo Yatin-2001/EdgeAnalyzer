@@ -1,0 +1,1 @@
+{"version":3,"file":"MCPProtocol.d.ts","sourceRoot":"","sources":["MCPProtocol.ts"],"names":[],"mappings":"AAAA,OAAO,EAAE,SAAS,EAAE,MAAM,IAAI,CAAC;AAG/B,qBAAa,WAAW;IACpB,OAAO,CAAC,MAAM,CAA8B;IAE/B,aAAa,CAAC,EAAE,EAAE,SAAS,EAAE,UAAU,EAAE,MAAM,GAAG,OAAO,CAAC,IAAI,CAAC,CAmD3E;CACJ"}
