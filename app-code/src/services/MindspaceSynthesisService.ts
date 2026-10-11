@@ -5,6 +5,7 @@ import {
 } from '../database/repository';
 import { LLMService } from './LLMService';
 import { ToolOrchestrator } from './ToolOrchestrator';
+import { MeshClientService } from './MeshClientService';
 
 export interface SynthesisProgressCallback {
     onStatusUpdate: (statusText: string) => void;
@@ -15,6 +16,7 @@ export class MindspaceSynthesisService {
     private static instance: MindspaceSynthesisService;
     private llm = LLMService.getInstance();
     private orchestrator = ToolOrchestrator.getInstance();
+    private mesh = MeshClientService.getInstance();
 
     private constructor() {}
 
@@ -27,13 +29,20 @@ export class MindspaceSynthesisService {
 
     /**
      * Two-Stage Synthesis Pipeline:
-     * 1. Live Web Research (Tool Calling Enabled)
-     * 2. Full Markdown Report Generation (Tools Disabled, nPredict: 2048)
+     * 1. Live Web Research (Tool Calling Enabled if local, or skipped on remote thin client)
+     * 2. Full Markdown Report Generation (nPredict: 2048)
      */
     public async synthesizeNotebookToScratchpad(
         notebookId: string,
         callbacks: SynthesisProgressCallback
     ): Promise<string> {
+        const target = this.mesh.getSelectedTarget();
+        const isRemoteTarget = target.nodeId !== 'local_engine';
+
+        if (!isRemoteTarget && !this.llm.isReady()) {
+            throw new Error('Please load a local model or select a remote compute node.');
+        }
+
         const notebook = await getNotebookById(notebookId);
         if (!notebook) throw new Error('Notebook not found.');
 
@@ -61,49 +70,50 @@ export class MindspaceSynthesisService {
         });
 
         // =========================================================================
-        // STAGE 1: Live Web Research Phase (Tools ENABLED)
+        // STAGE 1: Live Web Research Phase
         // =========================================================================
-        callbacks.onStatusUpdate('Running live web research for missing facts & pricing...');
-
-        const researchQuery = `Search web for latest release dates, confirmed platforms, and pricing for: ${notebook.title}`;
-        const researchSystem = this.orchestrator.formatSystemPromptWithTools(
-            'You are a research bot. If needed, call web_search to find facts not in the assets.',
-            researchQuery
-        );
-
-        const researchPrompt =
-            `<|im_start|>system\n${researchSystem}\n\n${assetBriefs}<|im_end|>\n` +
-            `<|im_start|>user\nFind any missing specs or details online for ${notebook.title}.<|im_end|>\n` +
-            `<|im_start|>assistant\n`;
-
         let gatheredResearch = '';
-        try {
-            const researchRes = await this.orchestrator.executeAgentLoop(
-                researchPrompt,
-                researchQuery,
-                {
-                    onToken: () => {
-                        // Required by OrchestrationCallbacks; silent during tool execution
-                    },
-                    onToolCallDetected: (tool, params) => {
-                        const query = params?.query || params?.expression || '';
-                        callbacks.onStatusUpdate(`Searching web: "${String(query).substring(0, 35)}..."`);
-                    },
-                    onToolExecutionCompleted: () => {
-                        callbacks.onStatusUpdate('Processing web search results...');
-                    },
-                }
+
+        if (!isRemoteTarget && this.llm.isReady()) {
+            callbacks.onStatusUpdate('Running live web research for missing facts & pricing...');
+
+            const researchQuery = `Search web for latest release dates, confirmed platforms, and pricing for: ${notebook.title}`;
+            const researchSystem = this.orchestrator.formatSystemPromptWithTools(
+                'You are a research bot. If needed, call web_search to find facts not in the assets.',
+                researchQuery
             );
-            gatheredResearch = researchRes.fullText.trim();
-        } catch {
-            gatheredResearch = 'Web research skipped.';
+
+            const researchPrompt =
+                `<|im_start|>system\n${researchSystem}\n\n${assetBriefs}<|im_end|>\n` +
+                `<|im_start|>user\nFind any missing specs or details online for ${notebook.title}.<|im_end|>\n` +
+                `<|im_start|>assistant\n`;
+
+            try {
+                const researchRes = await this.orchestrator.executeAgentLoop(
+                    researchPrompt,
+                    researchQuery,
+                    {
+                        onToken: () => {},
+                        onToolCallDetected: (tool, params) => {
+                            const query = params?.query || params?.expression || '';
+                            callbacks.onStatusUpdate(`Searching web: "${String(query).substring(0, 35)}..."`);
+                        },
+                        onToolExecutionCompleted: () => {
+                            callbacks.onStatusUpdate('Processing web search results...');
+                        },
+                    }
+                );
+                gatheredResearch = researchRes.fullText.trim();
+            } catch {
+                gatheredResearch = 'Web research skipped.';
+            }
+        } else {
+            gatheredResearch = 'Grounding on attached notebook assets and knowledge cards.';
         }
 
         // =========================================================================
-        // STAGE 2: Clean Markdown Report Generation (Tools DISABLED, nPredict: 2048)
+        // STAGE 2: Clean Markdown Report Generation
         // =========================================================================
-        callbacks.onStatusUpdate('Compiling comprehensive report to Scratchpad...');
-
         const finalDraftSystem =
             `You are an expert analytical report writer. Write a detailed, clean Markdown report synthesizing the assets and live research below.\n` +
             `Do NOT simulate tool calls, code execution, or internal monologues.\n` +
@@ -114,22 +124,37 @@ export class MindspaceSynthesisService {
             `## Recommendations & Next Steps`;
 
         const finalDraftPrompt =
-            `<|im_start|>system\n${finalDraftSystem}\n\n${assetBriefs}\n### LIVE WEB RESEARCH FINDINGS:\n${gatheredResearch}<|im_end|>\n` +
+            `<|im_start|>system\n${finalDraftSystem}\n\n${assetBriefs}\n### LIVE RESEARCH CONTEXT:\n${gatheredResearch}<|im_end|>\n` +
             `<|im_start|>user\nGenerate the complete Markdown synthesis report now.<|im_end|>\n` +
             `<|im_start|>assistant\n`;
 
-        const reportRes = await this.llm.streamCompletion(
-            {
-                prompt: finalDraftPrompt,
-                nPredict: 2048,
-                temperature: 0.2,
-            },
-            {
-                onToken: (tok) => callbacks.onPartialReport?.(tok),
-            }
-        );
+        let finalReport = '';
 
-        const finalReport = reportRes.fullText.trim();
+        if (isRemoteTarget) {
+            callbacks.onStatusUpdate(`Synthesizing comprehensive report on ${target.displayName}...`);
+            await this.mesh.streamChat(
+                [{ role: 'user', content: finalDraftPrompt }],
+                (tok) => {
+                    finalReport += tok;
+                    callbacks.onPartialReport?.(tok);
+                }
+            );
+            finalReport = finalReport.trim();
+        } else {
+            callbacks.onStatusUpdate('Compiling comprehensive report to Scratchpad...');
+            const reportRes = await this.llm.streamCompletion(
+                {
+                    prompt: finalDraftPrompt,
+                    nPredict: 2048,
+                    temperature: 0.2,
+                },
+                {
+                    onToken: (tok) => callbacks.onPartialReport?.(tok),
+                }
+            );
+            finalReport = reportRes.fullText.trim();
+        }
+
         await updateNotebookNotes(notebookId, finalReport);
         callbacks.onStatusUpdate('Report generated and saved to Scratchpad!');
 

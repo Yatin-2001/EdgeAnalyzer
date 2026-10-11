@@ -377,7 +377,12 @@ export class MeshClientService {
         }
 
         if (node.deviceTier === 'thick_mobile') {
-            const prompt = messages.map((m) => `${m.role}: ${m.content}`).join('\n');
+            // If already formatted with prompt markers (ChatML or Header IDs), pass directly
+            const prompt =
+                messages.length === 1 && (messages[0].content.includes('<|im_start|>') || messages[0].content.includes('<|start_header_id|>'))
+                    ? messages[0].content
+                    : messages.map((m) => `${m.role}: ${m.content}`).join('\n');
+
             await this.streamFromMobileWorker(node, prompt, onToken);
             return;
         }

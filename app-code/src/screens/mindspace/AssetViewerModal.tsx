@@ -19,6 +19,7 @@ import {
 } from '../../database/repository';
 import { MindspaceIngestionService } from '../../services/MindspaceIngestionService';
 import { LLMService } from '../../services/LLMService';
+import { MeshClientService } from '../../services/MeshClientService';
 
 interface Props {
   visible: boolean;
@@ -73,8 +74,12 @@ export const AssetViewerModal: React.FC<Props> = ({
   };
 
   const handleReanalyze = async () => {
-    if (!llm.isReady()) {
-      Alert.alert('No Model Loaded', 'Please load a model first.');
+    const mesh = MeshClientService.getInstance();
+    const target = mesh.getSelectedTarget();
+    const isRemoteTarget = target.nodeId !== 'local_engine';
+
+    if (!isRemoteTarget && !llm.isReady()) {
+      Alert.alert('No Model Loaded', 'Please load a local model or select a remote compute node.');
       return;
     }
     setIsReanalyzing(true);

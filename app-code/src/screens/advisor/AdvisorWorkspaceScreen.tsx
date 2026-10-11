@@ -24,6 +24,9 @@ import {
     CommunicationAdvisorService,
     AdvisoryResult,
 } from '../../services/CommunicationAdvisorService';
+import { ComputeTargetSwitcher } from '../../components/ComputeTargetSwitcher';
+import { MeshClientService } from '../../services/MeshClientService';
+import { LLMService } from '../../services/LLMService';
 
 interface Props {
     initialContactId?: string | null;
@@ -44,6 +47,8 @@ export const AdvisorWorkspaceScreen: React.FC<Props> = ({
                                                         }) => {
     const insets = useSafeAreaInsets();
     const advisorService = CommunicationAdvisorService.getInstance();
+    const mesh = MeshClientService.getInstance();
+    const llm = LLMService.getInstance();
 
     const [contactId, setContactId] = useState<string | null>(initialContactId);
     const [activeContact, setActiveContact] = useState<ContactRecord | null>(null);
@@ -80,7 +85,6 @@ export const AdvisorWorkspaceScreen: React.FC<Props> = ({
         })();
     }, [contactId]);
 
-    // Handle Screenshot Upload
     const handlePickScreenshot = async () => {
         const res = await ImagePicker.launchImageLibraryAsync({
             mediaTypes: ['images'],
@@ -98,7 +102,6 @@ export const AdvisorWorkspaceScreen: React.FC<Props> = ({
                 setTranscriptText(parsed.rawTranscript);
                 setDetectedPlatform(parsed.detectedPlatform);
 
-                // Prompt user for contact confirmation if not already linked
                 if (!contactId || contactId === 'anonymous') {
                     if (parsed.detectedName) {
                         setDetectedName(parsed.detectedName);
@@ -113,10 +116,16 @@ export const AdvisorWorkspaceScreen: React.FC<Props> = ({
         }
     };
 
-    // Execute Analysis
     const handleRunAdvice = async () => {
         if (!transcriptText.trim()) {
             Alert.alert('Input Required', 'Please upload a screenshot or enter a conversation scenario.');
+            return;
+        }
+
+        const target = mesh.getSelectedTarget();
+        const isRemoteTarget = target.nodeId !== 'local_engine';
+        if (!isRemoteTarget && !llm.isReady()) {
+            Alert.alert('Model Not Loaded', 'Please load a local model or select a remote compute node.');
             return;
         }
 
@@ -188,6 +197,9 @@ export const AdvisorWorkspaceScreen: React.FC<Props> = ({
                 </View>
                 <View style={{ width: 40 }} />
             </View>
+
+            {/* Compute Target Switcher */}
+            <ComputeTargetSwitcher />
 
             <ScrollView style={styles.scrollArea} contentContainerStyle={styles.scrollContent}>
                 {/* Input Switcher */}
@@ -298,7 +310,6 @@ export const AdvisorWorkspaceScreen: React.FC<Props> = ({
                 {/* Results Section */}
                 {result && (
                     <View style={styles.resultsContainer}>
-                        {/* Subtext Analysis Card */}
                         <View style={styles.adviceCard}>
                             <View style={styles.adviceHeader}>
                                 <Text style={styles.adviceTitle}>🧠 Subtext & Dynamics</Text>
@@ -310,7 +321,6 @@ export const AdvisorWorkspaceScreen: React.FC<Props> = ({
                             <Text style={styles.strategicText}>{result.strategicAdvice}</Text>
                         </View>
 
-                        {/* 3-Tier Reply Cards */}
                         <Text style={[styles.sectionLabel, { marginTop: 14 }]}>
                             Strategic Reply Options:
                         </Text>
@@ -339,7 +349,6 @@ export const AdvisorWorkspaceScreen: React.FC<Props> = ({
                             </View>
                         ))}
 
-                        {/* Custom Sent Message Reinforcement */}
                         <View style={styles.customFeedbackBox}>
                             <Text style={styles.customFeedbackTitle}>
                                 Sent something different?

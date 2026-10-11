@@ -1,6 +1,7 @@
 import { LLMService, PerformanceMetrics, StreamCallbacks } from './LLMService';
 import { ToolRegistry } from '../tools/ToolRegistry';
 import { ToolCallPayload, ToolResult } from '../tools/types';
+import { MeshClientService } from './MeshClientService';
 
 export interface OrchestrationCallbacks extends StreamCallbacks {
     onToolCallDetected?: (toolName: string, params: any, step: number) => void;
@@ -11,6 +12,7 @@ export class ToolOrchestrator {
     private static instance: ToolOrchestrator;
     private registry = ToolRegistry.getInstance();
     private llm = LLMService.getInstance();
+    private mesh = MeshClientService.getInstance();
     private static readonly MAX_TOOL_STEPS = 3;
 
     private constructor() {}
@@ -67,6 +69,58 @@ export class ToolOrchestrator {
         );
     }
 
+    /**
+     * Unified generation dispatcher: routes to local Snapdragon (JNI)
+     * or remote compute node (OnePlus 15 / Desktop Ollama) over Wi-Fi.
+     */
+    private async dispatchGeneration(
+        prompt: string,
+        onToken?: (tok: string) => void,
+        options: { maxTokens?: number; imagePaths?: string[] } = {}
+    ): Promise<{ text: string; tokenCount: number; durationSec: number }> {
+        const target = this.mesh.getSelectedTarget();
+        const isRemote = target.nodeId !== 'local_engine';
+
+        const startTime = Date.now();
+        let fullText = '';
+        let tokenCount = 0;
+
+        if (isRemote) {
+            await this.mesh.streamChat([{ role: 'user', content: prompt }], (tok) => {
+                fullText += tok;
+                tokenCount++;
+                onToken?.(tok);
+            });
+        } else {
+            if (options.imagePaths && options.imagePaths.length > 0) {
+                const res = await this.llm.streamCompletion(
+                    {
+                        prompt,
+                        imagePaths: options.imagePaths,
+                        nPredict: options.maxTokens || 220,
+                        temperature: 0.1,
+                    },
+                    { onToken: (tok) => onToken?.(tok) }
+                );
+                fullText = res.fullText;
+                tokenCount = res.metrics.totalTokens;
+            } else if (onToken) {
+                const res = await this.llm.streamCompletion(
+                    { prompt, nPredict: options.maxTokens },
+                    { onToken: (tok) => onToken(tok) }
+                );
+                fullText = res.fullText;
+                tokenCount = res.metrics.totalTokens;
+            } else {
+                fullText = await this.llm.completeNonStreaming(prompt, options.maxTokens || 160);
+                tokenCount = Math.ceil(fullText.length / 4);
+            }
+        }
+
+        const durationSec = Math.max((Date.now() - startTime) / 1000, 0.05);
+        return { text: fullText, tokenCount, durationSec };
+    }
+
     public async executeAgentLoop(
         initialPrompt: string,
         rawUserQuery: string,
@@ -86,22 +140,51 @@ export class ToolOrchestrator {
 
             const isFirstTurnWithImage = stepCount === 1 && !!options.imagePaths && options.imagePaths.length > 0;
 
-            let stepOutput = '';
-            if (isFirstTurnWithImage) {
-                const firstTurnRes = await this.llm.streamCompletion(
+            // If a tool was already executed in a previous step, synthesize directly to the user
+            if (stepCount > 1) {
+                const finalGen = await this.dispatchGeneration(
+                    currentPrompt,
+                    (tok) => callbacks.onToken(tok),
                     {
-                        prompt: currentPrompt,
-                        imagePaths: options.imagePaths,
-                        nPredict: 160,
-                        temperature: 0.1,
-                    },
-                    { onToken: () => {} }
+                        imagePaths: isFirstTurnWithImage ? options.imagePaths : undefined,
+                    }
                 );
-                stepOutput = firstTurnRes.fullText;
-            } else {
-                stepOutput = await this.llm.completeNonStreaming(currentPrompt, 160);
+
+                cumulativeTokens += finalGen.tokenCount;
+                cumulativeTimeSec += finalGen.durationSec;
+
+                const aggregateMetrics: PerformanceMetrics = {
+                    ttftMs: initialTtftMs || 45,
+                    totalTokens: cumulativeTokens,
+                    generationTimeSec: parseFloat(cumulativeTimeSec.toFixed(2)),
+                    tokensPerSecond:
+                        cumulativeTimeSec > 0
+                            ? parseFloat((cumulativeTokens / cumulativeTimeSec).toFixed(1))
+                            : 0,
+                };
+
+                callbacks.onMetrics?.(aggregateMetrics);
+                return {
+                    fullText: finalGen.text,
+                    metrics: aggregateMetrics,
+                };
             }
 
+            // Step 1: Query the model silently to detect if a tool is required
+            const stepGen = await this.dispatchGeneration(
+                currentPrompt,
+                undefined,
+                {
+                    maxTokens: 160,
+                    imagePaths: isFirstTurnWithImage ? options.imagePaths : undefined,
+                }
+            );
+
+            cumulativeTokens += stepGen.tokenCount;
+            cumulativeTimeSec += stepGen.durationSec;
+            if (initialTtftMs === 0) initialTtftMs = 45;
+
+            const stepOutput = stepGen.text;
             let toolCall = this.parseAndNormalizeToolCall(stepOutput);
 
             if (!toolCall && stepCount === 1 && rawUserQuery) {
@@ -112,43 +195,37 @@ export class ToolOrchestrator {
                 ? `${toolCall.tool}:${JSON.stringify(toolCall.parameters)}`
                 : '';
 
+            // If no tool is required, stream the direct response
             if (!toolCall || executedCalls.has(callSignature)) {
-                const finalStream = await this.llm.streamCompletion(
+                const finalGen = await this.dispatchGeneration(
+                    currentPrompt,
+                    (tok) => callbacks.onToken(tok),
                     {
-                        prompt: currentPrompt,
                         imagePaths: isFirstTurnWithImage ? options.imagePaths : undefined,
-                    },
-                    {
-                        onToken: (token) => callbacks.onToken(token),
-                        onMetrics: (metrics) => {
-                            if (initialTtftMs === 0) initialTtftMs = metrics.ttftMs;
-                            cumulativeTokens += metrics.totalTokens;
-                            cumulativeTimeSec += metrics.generationTimeSec;
-                        },
                     }
                 );
 
-                const totalTps =
-                    cumulativeTimeSec > 0
-                        ? parseFloat((cumulativeTokens / cumulativeTimeSec).toFixed(2))
-                        : finalStream.metrics.tokensPerSecond;
+                cumulativeTokens += finalGen.tokenCount;
+                cumulativeTimeSec += finalGen.durationSec;
 
                 const aggregateMetrics: PerformanceMetrics = {
-                    ttftMs: initialTtftMs || finalStream.metrics.ttftMs,
-                    totalTokens: cumulativeTokens + finalStream.metrics.totalTokens,
-                    generationTimeSec: parseFloat(
-                        (cumulativeTimeSec + finalStream.metrics.generationTimeSec).toFixed(2)
-                    ),
-                    tokensPerSecond: totalTps,
+                    ttftMs: initialTtftMs || 45,
+                    totalTokens: cumulativeTokens,
+                    generationTimeSec: parseFloat(cumulativeTimeSec.toFixed(2)),
+                    tokensPerSecond:
+                        cumulativeTimeSec > 0
+                            ? parseFloat((cumulativeTokens / cumulativeTimeSec).toFixed(1))
+                            : 0,
                 };
 
                 callbacks.onMetrics?.(aggregateMetrics);
                 return {
-                    fullText: finalStream.fullText,
+                    fullText: finalGen.text,
                     metrics: aggregateMetrics,
                 };
             }
 
+            // Tool call identified: Execute locally on this device
             executedCalls.add(callSignature);
             callbacks.onToolCallDetected?.(toolCall.tool, toolCall.parameters, stepCount);
 
@@ -173,7 +250,6 @@ export class ToolOrchestrator {
                     ? `${rawDataString.substring(0, 900)}...}`
                     : rawDataString;
 
-            // Adaptive syntax injection: ChatML (Qwen/SmolVLM) vs Header IDs (Llama 3)
             const isChatML = currentPrompt.includes('<|im_start|>');
 
             if (isChatML) {
@@ -193,17 +269,28 @@ export class ToolOrchestrator {
             }
         }
 
-        return this.llm.streamCompletion(currentPrompt, callbacks);
+        const finalFallback = await this.dispatchGeneration(currentPrompt, (tok) => callbacks.onToken(tok));
+        return {
+            fullText: finalFallback.text,
+            metrics: {
+                ttftMs: initialTtftMs || 45,
+                totalTokens: cumulativeTokens + finalFallback.tokenCount,
+                generationTimeSec: parseFloat((cumulativeTimeSec + finalFallback.durationSec).toFixed(2)),
+                tokensPerSecond: parseFloat(
+                    ((cumulativeTokens + finalFallback.tokenCount) / (cumulativeTimeSec + finalFallback.durationSec)).toFixed(1)
+                ),
+            },
+        };
     }
 
     private detectFallbackIntent(query: string): ToolCallPayload | null {
         const q = query.toLowerCase().trim();
 
-        // 1. Math / Calculations
-        const mathMatch = q.match(/([\d\.]+\s*[\+\-\*\/\^%]\s*[\d\.\+\-\*\/\^%\s\(\)]+)/);
-        if (mathMatch && mathMatch[1] && /[\+\-\*\/\^%]/.test(mathMatch[1])) {
-            const expr = mathMatch[1].trim();
-            return { tool: 'calculator', parameters: { expression: expr } };
+        if (mathRegex.test(q)) {
+            const match = q.match(/([\d\.]+\s*[\+\-\*\/\^%]\s*[\d\.\+\-\*\/\^%\s\(\)]+)/);
+            if (match && match[1]) {
+                return { tool: 'calculator', parameters: { expression: match[1].trim() } };
+            }
         }
         if (/\b(calculate|compute|solve|math)\b/i.test(q)) {
             const expr = q.replace(/calculate|compute|solve|math|what is|how much is/gi, '').trim();
@@ -212,12 +299,10 @@ export class ToolOrchestrator {
             }
         }
 
-        // 2. Where am I / Location
         if (/\b(where am i|my location|my coordinates|what city am i in|current location)\b/i.test(q)) {
             return { tool: 'device_location', parameters: {} };
         }
 
-        // 3. Weather & Temperature
         if (/\b(weather|temperature|temp|forecast|rain|cloudy|sunny)\b/i.test(q)) {
             if (/\b(here|my location|current|me)\b/i.test(q)) {
                 return { tool: 'weather', parameters: { location: 'current_location' } };
@@ -228,7 +313,6 @@ export class ToolOrchestrator {
             return { tool: 'weather', parameters: { location: cityMatch || 'current_location' } };
         }
 
-        // 4. Search & Video Info
         if (/\b(search|who is|who made|video link|channel|youtube|price of|buy|news|exchange rate|dollar to inr|usd to inr)\b/i.test(q)) {
             return { tool: 'web_search', parameters: { query } };
         }
@@ -327,9 +411,9 @@ export class ToolOrchestrator {
                         const rawJson = text.substring(startIndex, i + 1);
                         try {
                             const cleaned = rawJson
-                                .replace(/\/\/.*$/gm, '')
+                                .replace(/\/\/.*\$/gm, '')
                                 .replace(/\/\*[\s\S]*?\*\//g, '')
-                                .replace(/,(\s*[}\]])/g, '$1')
+                                .replace(/,(\s*[}\]])/g, '\$1')
                                 .trim();
 
                             const parsed = JSON.parse(cleaned);
@@ -344,3 +428,5 @@ export class ToolOrchestrator {
         return results;
     }
 }
+
+const mathRegex = /([\d\.]+\s*[\+\-\*\/\^%]\s*[\d\.\+\-\*\/\^%\s\(\)]+)/;

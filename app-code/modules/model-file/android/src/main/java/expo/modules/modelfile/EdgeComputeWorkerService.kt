@@ -123,113 +123,143 @@ class EdgeComputeWorkerService : Service() {
     }
 
     private fun handleClient(socket: Socket) {
-        try {
-            socket.soTimeout = 15000 // 15-second read timeout
-            val reader = BufferedReader(InputStreamReader(socket.getInputStream()))
-            val out = socket.getOutputStream()
+            try {
+                socket.soTimeout = 30000 // 30-second read timeout for LLM inference
+                val inStream = socket.getInputStream()
+                val out = socket.getOutputStream()
 
-            val requestLine = reader.readLine() ?: return
-            val parts = requestLine.split(" ")
-            if (parts.size < 2) return
-
-            val method = parts[0]
-            val path = parts[1]
-
-            // Read headers to determine Content-Length
-            var contentLength = 0
-            var line: String?
-            while (reader.readLine().also { line = it } != null) {
-                if (line.isNullOrEmpty()) break
-                if (line!!.lowercase().startsWith("content-length:")) {
-                    contentLength = line!!.substring(15).trim().toIntOrNull() ?: 0
+                // 1. Read HTTP headers byte-by-byte until \r\n\r\n
+                val headerBuffer = java.io.ByteArrayOutputStream()
+                var prev = -1
+                var prevPrev = -1
+                var prevPrevPrev = -1
+                var b: Int
+                while (inStream.read().also { b = it } != -1) {
+                    headerBuffer.write(b)
+                    if (prevPrevPrev == '\r'.code && prevPrev == '\n'.code && prev == '\r'.code && b == '\n'.code) {
+                        break
+                    }
+                    prevPrevPrev = prevPrev
+                    prevPrev = prev
+                    prev = b
                 }
-            }
 
-            // CORS Preflight
-            if (method == "OPTIONS") {
-                sendHttpResponse(socket, out, 204, "No Content", "text/plain", "")
-                return
-            }
+                if (b == -1 && headerBuffer.size() == 0) return
 
-            // Route 1: Telemetry & Model Discovery
-            if (method == "GET" && path.startsWith("/api/mesh/telemetry")) {
-                val hasModel = activeModelName != "No Model Loaded"
-                val json = JSONObject().apply {
-                    put("nodeName", "OnePlus 15")
-                    put("tier", "thick_mobile")
-                    put("status", if (hasModel) "ready" else "idle")
-                    put("activeModel", if (hasModel) activeModelName else null)
-                    put("gpu", "Qualcomm Adreno (OpenCL)")
-                    put("models", org.json.JSONArray().apply {
-                        if (hasModel) {
-                            put(JSONObject().apply {
-                                put("name", activeModelName)
-                                put("parameter_size", "Dynamic")
-                                put("size", 0L)
-                            })
-                        }
-                    })
+                val headerStr = headerBuffer.toString("UTF-8")
+                val headerLines = headerStr.split("\r\n")
+                if (headerLines.isEmpty()) return
+
+                val requestLine = headerLines[0]
+                val parts = requestLine.split(" ")
+                if (parts.size < 2) return
+
+                val method = parts[0]
+                val path = parts[1]
+
+                // 2. Extract Content-Length in exact octets/bytes
+                var contentLength = 0
+                for (line in headerLines) {
+                    if (line.lowercase().startsWith("content-length:")) {
+                        contentLength = line.substring(15).trim().toIntOrNull() ?: 0
+                        break
+                    }
                 }
-                sendHttpResponse(socket, out, 200, "OK", "application/json", json.toString())
-                return
-            }
 
-            // Route 2: SSE Streaming Inference
-            if (method == "POST" && path.startsWith("/api/mesh/inference")) {
-                val bodyChars = CharArray(contentLength)
-                reader.read(bodyChars, 0, contentLength)
-                val bodyStr = String(bodyChars)
-                val reqJson = JSONObject(bodyStr)
-                val prompt = reqJson.optString("prompt", "")
-
-                val header = "HTTP/1.1 200 OK\r\n" +
-                        "Content-Type: text/event-stream\r\n" +
-                        "Cache-Control: no-cache\r\n" +
-                        "Connection: keep-alive\r\n" +
-                        "Access-Control-Allow-Origin: *\r\n\r\n"
-                out.write(header.toByteArray(Charsets.UTF_8))
-                out.flush()
-
-                val dispatcher = onRequestInference
-                if (dispatcher == null || activeModelName == "No Model Loaded") {
-                    val fallback = "data: {\"token\":\"[Error: No active model loaded on host phone]\"}\n\n"
-                    out.write(fallback.toByteArray(Charsets.UTF_8))
-                    out.write("data: [DONE]\n\n".toByteArray(Charsets.UTF_8))
-                    out.flush()
+                // CORS Preflight
+                if (method == "OPTIONS") {
+                    sendHttpResponse(socket, out, 204, "No Content", "text/plain", "")
                     return
                 }
 
-                val requestId = "req_${System.currentTimeMillis()}"
-                val latch = CountDownLatch(1)
+                // Route 1: Telemetry & Model Discovery
+                if (method == "GET" && path.startsWith("/api/mesh/telemetry")) {
+                    val hasModel = activeModelName != "No Model Loaded"
+                    val json = JSONObject().apply {
+                        put("nodeName", "OnePlus 15")
+                        put("tier", "thick_mobile")
+                        put("status", if (hasModel) "ready" else "idle")
+                        put("activeModel", if (hasModel) activeModelName else null)
+                        put("gpu", "Qualcomm Adreno (OpenCL)")
+                        put("models", org.json.JSONArray().apply {
+                            if (hasModel) {
+                                put(JSONObject().apply {
+                                    put("name", activeModelName)
+                                    put("parameter_size", "Dynamic")
+                                    put("size", 0L)
+                                })
+                            }
+                        })
+                    }
+                    sendHttpResponse(socket, out, 200, "OK", "application/json", json.toString())
+                    return
+                }
 
-                activeSessions[requestId] = InferenceSession(
-                    onToken = { token ->
-                        try {
-                            val chunk = "data: " + JSONObject().put("token", token).toString() + "\n\n"
-                            out.write(chunk.toByteArray(Charsets.UTF_8))
-                            out.flush()
-                        } catch (e: Exception) {}
-                    },
-                    latch = latch
-                )
+                // Route 2: SSE Streaming Inference (Robust multi-packet byte reader)
+                if (method == "POST" && path.startsWith("/api/mesh/inference")) {
+                    val bodyBytes = ByteArray(contentLength)
+                    var totalBytesRead = 0
+                    while (totalBytesRead < contentLength) {
+                        val count = inStream.read(bodyBytes, totalBytesRead, contentLength - totalBytesRead)
+                        if (count == -1) break
+                        totalBytesRead += count
+                    }
+                    val bodyStr = String(bodyBytes, 0, totalBytesRead, Charsets.UTF_8)
+                    val reqJson = JSONObject(bodyStr)
+                    val prompt = reqJson.optString("prompt", "")
 
-                dispatcher.invoke(requestId, prompt)
+                    val header = "HTTP/1.1 200 OK\r\n" +
+                            "Content-Type: text/event-stream\r\n" +
+                            "Cache-Control: no-cache\r\n" +
+                            "Connection: close\r\n" +
+                            "Access-Control-Allow-Origin: *\r\n\r\n"
+                    out.write(header.toByteArray(Charsets.UTF_8))
+                    out.flush()
 
-                latch.await(120, TimeUnit.SECONDS)
-                activeSessions.remove(requestId)
+                    val dispatcher = onRequestInference
+                    if (dispatcher == null || activeModelName == "No Model Loaded") {
+                        val fallback = "data: {\"token\":\"[Error: No active model loaded on host phone]\"}\n\n"
+                        out.write(fallback.toByteArray(Charsets.UTF_8))
+                        out.write("data: [DONE]\n\n".toByteArray(Charsets.UTF_8))
+                        out.flush()
+                        try { socket.shutdownOutput() } catch (e: Exception) {}
+                        return
+                    }
 
-                out.write("data: [DONE]\n\n".toByteArray(Charsets.UTF_8))
-                out.flush()
-                return
+                    val requestId = "req_${System.currentTimeMillis()}"
+                    val latch = CountDownLatch(1)
+
+                    activeSessions[requestId] = InferenceSession(
+                        onToken = { token ->
+                            try {
+                                val chunk = "data: " + JSONObject().put("token", token).toString() + "\n\n"
+                                out.write(chunk.toByteArray(Charsets.UTF_8))
+                                out.flush()
+                            } catch (e: Exception) {}
+                        },
+                        latch = latch
+                    )
+
+                    dispatcher.invoke(requestId, prompt)
+
+                    latch.await(120, TimeUnit.SECONDS)
+                    activeSessions.remove(requestId)
+
+                    out.write("data: [DONE]\n\n".toByteArray(Charsets.UTF_8))
+                    out.flush()
+                    try {
+                        socket.shutdownOutput() // Clean FIN packet
+                    } catch (e: Exception) {}
+                    return
+                }
+
+                sendHttpResponse(socket, out, 404, "Not Found", "text/plain", "Not Found")
+            } catch (e: Exception) {
+                Log.e(TAG, "Client socket error: ${e.message}", e)
+            } finally {
+                try { socket.close() } catch (e: Exception) {}
             }
-
-            sendHttpResponse(socket, out, 404, "Not Found", "text/plain", "Not Found")
-        } catch (e: Exception) {
-            Log.e(TAG, "Client socket error: ${e.message}")
-        } finally {
-            try { socket.close() } catch (e: Exception) {}
         }
-    }
 
     private fun sendHttpResponse(socket: Socket, out: OutputStream, code: Int, status: String, contentType: String, body: String) {
         val bytes = body.toByteArray(Charsets.UTF_8)

@@ -14,6 +14,7 @@ import {
 import { LLMService, PerformanceMetrics } from './LLMService';
 import { EmbeddingService } from './EmbeddingService';
 import { ToolOrchestrator } from './ToolOrchestrator';
+import { MeshClientService } from './MeshClientService';
 
 export interface ScoredChunk {
   chunkId: string;
@@ -37,6 +38,7 @@ export class MindspaceRAGService {
   private llm = LLMService.getInstance();
   private embeddingService = EmbeddingService.getInstance();
   private orchestrator = ToolOrchestrator.getInstance();
+  private mesh = MeshClientService.getInstance();
 
   private constructor() {}
 
@@ -123,15 +125,13 @@ export class MindspaceRAGService {
     visualCandidates.sort((a, b) => b.score - a.score);
     documentCandidates.sort((a, b) => b.score - a.score);
 
-    // 4. Modality-Balanced Selection: Reserve guaranteed slots for images
-    // e.g., Target 6 total chunks: Max 3 Visual + Max 3 Document
+    // 4. Modality-Balanced Selection
     const balancedResults: ScoredChunk[] = [];
     const reservedVisual = visualCandidates.slice(0, 3);
     const reservedDocs = documentCandidates.slice(0, 3);
 
     balancedResults.push(...reservedVisual, ...reservedDocs);
 
-    // If one modality has fewer than 3, fill remaining capacity from the other
     if (balancedResults.length < 6) {
       const remainingSlots = 6 - balancedResults.length;
       if (visualCandidates.length > 3 && reservedDocs.length < 3) {
@@ -154,6 +154,13 @@ export class MindspaceRAGService {
       targetAssetId: string | null,
       callbacks: RAGCallbacks
   ): Promise<{ fullText: string; messageRecord: NotebookMessageRecord }> {
+    const target = this.mesh.getSelectedTarget();
+    const isRemoteTarget = target.nodeId !== 'local_engine';
+
+    if (!isRemoteTarget && !this.llm.isReady()) {
+      throw new Error('Please load a local model or select a remote compute node.');
+    }
+
     await insertNotebookMessage(
         conversationId,
         'user',
@@ -197,7 +204,9 @@ export class MindspaceRAGService {
           `You are MindSpace, an intelligent on-device research assistant analyzing a single asset.\n` +
           `Answer the user's questions accurately using the provided asset context.`;
 
-      const formattedSystem = this.orchestrator.formatSystemPromptWithTools(baseSystem, userQuery);
+      const formattedSystem = isRemoteTarget
+          ? baseSystem
+          : this.orchestrator.formatSystemPromptWithTools(baseSystem, userQuery);
 
       let historyString = '';
       for (const msg of recentTurns) {
@@ -225,7 +234,7 @@ export class MindspaceRAGService {
         const uniqueAssetIds = new Set<string>();
         topChunks.forEach((c) => {
           const typeLabel = c.assetType === 'screenshot' || c.assetType === 'image' ? 'Visual Card' : 'Doc Text';
-          groundingContext += `[Source: "${c.assetTitle}" (${typeLabel}) | Asset ID: ${c.assetId}]\n${c.chunkText}\n\n`;
+          groundingContext += `\n${c.chunkText}\n\n`;
 
           if (!uniqueAssetIds.has(c.assetId)) {
             uniqueAssetIds.add(c.assetId);
@@ -237,9 +246,8 @@ export class MindspaceRAGService {
           }
         });
       } else {
-        // Fallback to top-level knowledge cards
         allAssets.slice(0, 6).forEach((a) => {
-          groundingContext += `[Source: "${a.title}"]\n${a.structured_card || a.extracted_text?.substring(0, 200) || 'Empty'}\n\n`;
+          groundingContext += `\n${a.structured_card || a.extracted_text?.substring(0, 200) || 'Empty'}\n\n`;
           sources.push({
             asset_id: a.id,
             title: a.title,
@@ -258,7 +266,9 @@ export class MindspaceRAGService {
           `You are MindSpace, an on-device multimodal research assistant synthesizing information across all assets in notebook: "${notebook?.title || 'Research'}".\n` +
           `Compare specs, aggregate facts, and answer user queries accurately using the grounding sources above.`;
 
-      const formattedSystem = this.orchestrator.formatSystemPromptWithTools(baseSystem, userQuery);
+      const formattedSystem = isRemoteTarget
+          ? baseSystem
+          : this.orchestrator.formatSystemPromptWithTools(baseSystem, userQuery);
 
       let historyString = '';
       for (const msg of recentTurns) {
@@ -271,25 +281,50 @@ export class MindspaceRAGService {
           `<|im_start|>assistant\n`;
     }
 
-    const result = await this.orchestrator.executeAgentLoop(
-        promptPayload,
-        userQuery,
-        {
-          onToken: callbacks.onToken,
-          onMetrics: callbacks.onMetrics,
-        }
-    );
+    let fullText = '';
+    let totalTokens = 0;
+
+    if (isRemoteTarget) {
+      const startTime = Date.now();
+      await this.mesh.streamChat(
+          [{ role: 'user', content: promptPayload }],
+          (token) => {
+            fullText += token;
+            totalTokens++;
+            callbacks.onToken(token);
+          }
+      );
+      const durationSec = (Date.now() - startTime) / 1000;
+      const metrics: PerformanceMetrics = {
+        tokensPerSecond: durationSec > 0 ? parseFloat((totalTokens / durationSec).toFixed(1)) : 0,
+        totalTokens,
+        ttftMs: 45,
+        generationTimeSec: durationSec,
+      };
+      callbacks.onMetrics?.(metrics);
+    } else {
+      const result = await this.orchestrator.executeAgentLoop(
+          promptPayload,
+          userQuery,
+          {
+            onToken: callbacks.onToken,
+            onMetrics: callbacks.onMetrics,
+          }
+      );
+      fullText = result.fullText;
+      totalTokens = result.metrics.totalTokens;
+    }
 
     const assistantMsg = await insertNotebookMessage(
         conversationId,
         'assistant',
-        result.fullText,
+        fullText,
         sources,
-        result.metrics.totalTokens
+        totalTokens
     );
 
     return {
-      fullText: result.fullText,
+      fullText,
       messageRecord: assistantMsg,
     };
   }

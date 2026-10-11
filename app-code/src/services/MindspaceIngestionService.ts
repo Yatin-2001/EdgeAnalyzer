@@ -10,11 +10,13 @@ import {
 } from '../database/repository';
 import { LLMService } from './LLMService';
 import { EmbeddingService } from './EmbeddingService';
+import { MeshClientService } from './MeshClientService';
 
 export class MindspaceIngestionService {
   private static instance: MindspaceIngestionService;
   private llm = LLMService.getInstance();
   private embeddingService = EmbeddingService.getInstance();
+  private mesh = MeshClientService.getInstance();
 
   private constructor() {}
 
@@ -214,6 +216,8 @@ export class MindspaceIngestionService {
       assetType: string
   ): Promise<string> {
     const isVision = this.llm.isVisionCapable();
+    const target = this.mesh.getSelectedTarget();
+    const isRemote = target.nodeId !== 'local_engine';
 
     // Mode A: Vision Model Loaded -> Perform True Multimodal Grounding
     if (isVision && this.llm.isReady()) {
@@ -249,8 +253,8 @@ export class MindspaceIngestionService {
       }
     }
 
-    // Mode B: Text Model + Valid OCR Text -> Structure ONLY what was extracted
-    if (ocrText && ocrText.length > 15 && this.llm.isReady()) {
+    // Mode B: Remote or Local Text Model + Valid OCR Text
+    if (ocrText && ocrText.length > 15 && (this.llm.isReady() || isRemote)) {
       try {
         const prompt =
             `<|im_start|>system\n` +
@@ -260,9 +264,20 @@ export class MindspaceIngestionService {
             `Extract the title, names, numbers, and main topics from this text.<|im_end|>\n` +
             `<|im_start|>assistant\n`;
 
-        const res = await this.llm.completeNonStreaming(prompt, 180);
-        if (res.trim().length > 15) {
-          return `### ASSET CARD (OCR Extracted):\n${res.trim()}`;
+        let resText = '';
+        if (isRemote) {
+          await this.mesh.streamChat(
+              [{ role: 'user', content: prompt }],
+              (token) => {
+                resText += token;
+              }
+          );
+        } else {
+          resText = await this.llm.completeNonStreaming(prompt, 180);
+        }
+
+        if (resText.trim().length > 15) {
+          return `### ASSET CARD (OCR Extracted):\n${resText.trim()}`;
         }
       } catch (err) {
         console.warn('[MindspaceIngestion] OCR text formatting fallback:', err);
@@ -280,7 +295,7 @@ export class MindspaceIngestionService {
     return (
         `### ASSET CARD (${assetType.toUpperCase()}):\n` +
         `- Image stored. No text was detected via OCR.\n` +
-        `- Switch to a Vision model (e.g., Qwen2-VL or SmolVLM) in Settings, then tap "Re-Analyze" to extract full visual scene details.`
+        `- Switch to a Vision model in Settings, then tap "Re-Analyze" to extract full visual scene details.`
     );
   }
 

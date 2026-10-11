@@ -16,6 +16,7 @@ import {
 } from '../database/repository';
 import { LLMService } from './LLMService';
 import { EmbeddingService } from './EmbeddingService';
+import { MeshClientService } from './MeshClientService';
 
 export interface AdviceOption {
     label: string;
@@ -38,6 +39,7 @@ export class CommunicationAdvisorService {
     private static instance: CommunicationAdvisorService;
     private llm = LLMService.getInstance();
     private embeddingService = EmbeddingService.getInstance();
+    private mesh = MeshClientService.getInstance();
 
     private constructor() {}
 
@@ -48,9 +50,6 @@ export class CommunicationAdvisorService {
         return CommunicationAdvisorService.instance;
     }
 
-    /**
-     * 1. Inspect Screenshot & Extract OCR Dialogue
-     */
     public async parseScreenshotDialogue(imageUri: string): Promise<{
         rawTranscript: string;
         detectedName: string | null;
@@ -59,7 +58,6 @@ export class CommunicationAdvisorService {
     }> {
         let extractedText = '';
 
-        // Ensure the URI has a valid file:// scheme for Android's ContentResolver
         const formattedUri =
             imageUri.startsWith('file://') || imageUri.startsWith('content://')
                 ? imageUri
@@ -68,14 +66,13 @@ export class CommunicationAdvisorService {
         try {
             const ocrRes = await TextRecognition.recognize(formattedUri);
             extractedText = ocrRes?.text ? ocrRes.text.trim() : '';
-        } catch (err1) {
-            // Fallback: try raw path if the native binding expects an unadorned filesystem path
+        } catch {
             try {
                 const cleanPath = formattedUri.replace('file://', '');
                 const ocrRes = await TextRecognition.recognize(cleanPath);
                 extractedText = ocrRes?.text ? ocrRes.text.trim() : '';
-            } catch (err2) {
-                console.warn('[AdvisorService] OCR error:', err2);
+            } catch (ocrErr) {
+                console.warn('[AdvisorService] OCR error:', ocrErr);
             }
         }
 
@@ -89,7 +86,6 @@ export class CommunicationAdvisorService {
             if (manip?.uri) downscaledUri = manip.uri;
         } catch {}
 
-        // Detect Platform & Contact Name from top OCR lines
         const lines = extractedText.split('\n').map((l) => l.trim()).filter(Boolean);
         let detectedPlatform = 'whatsapp';
         const lower = extractedText.toLowerCase();
@@ -104,7 +100,6 @@ export class CommunicationAdvisorService {
             detectedPlatform = 'imessage';
         }
 
-        // Name heuristic: Inspect top 4 lines ignoring status bar timestamps/network info
         let detectedName: string | null = null;
         for (let i = 0; i < Math.min(lines.length, 4); i++) {
             const line = lines[i];
@@ -126,10 +121,6 @@ export class CommunicationAdvisorService {
         };
     }
 
-
-    /**
-     * 2. Generate Strategic Advice & 3-Tier Reply Options
-     */
     public async generateCommunicationAdvice(
         contactId: string | null,
         rawTranscriptOrScenario: string,
@@ -138,15 +129,17 @@ export class CommunicationAdvisorService {
         sourceType: 'screenshot' | 'manual_text' = 'screenshot',
         screenshotUri: string | null = null
     ): Promise<AdvisoryResult> {
-        if (!this.llm.isReady()) {
-            throw new Error('Please load a model first in the Settings modal.');
+        const target = this.mesh.getSelectedTarget();
+        const isRemoteTarget = target.nodeId !== 'local_engine';
+
+        if (!isRemoteTarget && !this.llm.isReady()) {
+            throw new Error('Please load a local model or select a remote compute node.');
         }
 
         let contact: ContactRecord | null = null;
         let relevantFacts: string[] = [];
         let pastSummaries: string[] = [];
 
-        // Retrieve Persona Context if linked to an entity
         if (contactId && contactId !== 'anonymous') {
             contact = await getContactById(contactId);
             if (contact) {
@@ -181,7 +174,6 @@ export class CommunicationAdvisorService {
             }
         }
 
-        // Dynamic Tone & Goal Resolution
         let effectiveGoal = userCustomGoal?.trim();
         if (!effectiveGoal && selectedPresetTone) {
             effectiveGoal = `Match this desired style: ${selectedPresetTone}`;
@@ -193,7 +185,6 @@ export class CommunicationAdvisorService {
             effectiveGoal = 'Provide natural, emotionally intelligent, and contextually appropriate options.';
         }
 
-        // Build Advisory Grounding Prompt
         const systemPrompt =
             `You are an expert interpersonal advisor and communication strategist.\n` +
             `Analyze conversation dynamics, breakdown underlying subtext, and produce 3 distinct, tailored reply suggestions.\n\n` +
@@ -228,18 +219,28 @@ export class CommunicationAdvisorService {
             `### DESIRED GOAL / TONE:\n${effectiveGoal}<|im_end|>\n` +
             `<|im_start|>assistant\n`;
 
-        const response = await this.llm.streamCompletion(
-            {
-                prompt: promptPayload,
-                nPredict: 450,
-                temperature: 0.2,
-            },
-            { onToken: () => {} }
-        );
+        let fullResponseText = '';
+        if (isRemoteTarget) {
+            await this.mesh.streamChat(
+                [{ role: 'user', content: promptPayload }],
+                (token) => {
+                    fullResponseText += token;
+                }
+            );
+        } else {
+            const response = await this.llm.streamCompletion(
+                {
+                    prompt: promptPayload,
+                    nPredict: 450,
+                    temperature: 0.2,
+                },
+                { onToken: () => {} }
+            );
+            fullResponseText = response.fullText;
+        }
 
-        const parsed = this.parseAdvisoryJson(response.fullText);
+        const parsed = this.parseAdvisoryJson(fullResponseText);
 
-        // Persist Interaction Log
         const interaction = await insertContactInteraction(
             contactId && contactId !== 'anonymous' ? contactId : null,
             sourceType,
@@ -250,7 +251,6 @@ export class CommunicationAdvisorService {
             screenshotUri
         );
 
-        // Evolve Profile Asynchronously (Non-blocking)
         if (contactId && contactId !== 'anonymous' && contact) {
             this.evolveContactMemoryAsync(contact, rawTranscriptOrScenario, parsed.subtextAnalysis);
         }
@@ -267,9 +267,6 @@ export class CommunicationAdvisorService {
         };
     }
 
-    /**
-     * 3. Record User Selection or Custom Sent Message to Evolve Context
-     */
     public async recordUserFeedback(
         interactionId: string,
         contactId: string | null,
@@ -282,7 +279,6 @@ export class CommunicationAdvisorService {
             customFeedbackText
         );
 
-        // Ingest custom user response into relationship memory
         if (contactId && contactId !== 'anonymous' && customFeedbackText) {
             const contact = await getContactById(contactId);
             if (contact) {
@@ -291,9 +287,6 @@ export class CommunicationAdvisorService {
         }
     }
 
-    /**
-     * Asynchronous Memory & Fact Extraction
-     */
     private async evolveContactMemoryAsync(
         contact: ContactRecord,
         dialogue: string,
@@ -307,7 +300,20 @@ export class CommunicationAdvisorService {
                 `<|im_start|>user\nDialogue:\n${dialogue.substring(0, 1000)}\nSubtext: ${subtext}<|im_end|>\n` +
                 `<|im_start|>assistant\n`;
 
-            const factsText = await this.llm.completeNonStreaming(prompt, 80);
+            let factsText = '';
+            const target = this.mesh.getSelectedTarget();
+            const isRemote = target.nodeId !== 'local_engine';
+
+            if (isRemote) {
+                await this.mesh.streamChat([{ role: 'user', content: prompt }], (t) => {
+                    factsText += t;
+                });
+            } else if (this.llm.isReady()) {
+                factsText = await this.llm.completeNonStreaming(prompt, 80);
+            } else {
+                return;
+            }
+
             const factLines = factsText
                 .split('\n')
                 .map((l) => l.replace(/^[-*•]\s*/, '').trim())
@@ -340,7 +346,20 @@ export class CommunicationAdvisorService {
                 `Output ONLY the updated 1-sentence style description.<|im_end|>\n` +
                 `<|im_start|>assistant\n`;
 
-            const updated = await this.llm.completeNonStreaming(prompt, 60);
+            let updated = '';
+            const target = this.mesh.getSelectedTarget();
+            const isRemote = target.nodeId !== 'local_engine';
+
+            if (isRemote) {
+                await this.mesh.streamChat([{ role: 'user', content: prompt }], (t) => {
+                    updated += t;
+                });
+            } else if (this.llm.isReady()) {
+                updated = await this.llm.completeNonStreaming(prompt, 60);
+            } else {
+                return;
+            }
+
             const cleanStyle = updated.replace(/["\n]/g, '').trim();
             if (cleanStyle.length > 5) {
                 await updateContact(
@@ -384,7 +403,6 @@ export class CommunicationAdvisorService {
             }
         } catch {}
 
-        // Fallback extraction
         return {
             detected_sentiment: 'neutral',
             subtextAnalysis: 'Direct conversational statement without deep underlying subtext.',

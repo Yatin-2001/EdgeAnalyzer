@@ -36,6 +36,8 @@ import { MindspaceSynthesisService } from '../../services/MindspaceSynthesisServ
 import { LLMService, PerformanceMetrics } from '../../services/LLMService';
 import { ModelRegistryModal } from '../../components/ModelRegistryModal';
 import { AssetViewerModal } from './AssetViewerModal';
+import { ComputeTargetSwitcher } from '../../components/ComputeTargetSwitcher';
+import { MeshClientService, UnifiedComputeTarget } from '../../services/MeshClientService';
 
 interface Props {
     notebookId: string;
@@ -55,6 +57,17 @@ export const NotebookDetailScreen: React.FC<Props> = ({
     const ragService = MindspaceRAGService.getInstance();
     const synthesisService = MindspaceSynthesisService.getInstance();
     const llm = LLMService.getInstance();
+    const mesh = useRef(MeshClientService.getInstance()).current;
+
+    const [currentTarget, setCurrentTarget] = useState<UnifiedComputeTarget>(mesh.getSelectedTarget());
+    const isRemoteTarget = currentTarget.nodeId !== 'local_engine';
+
+    useEffect(() => {
+        const unsub = mesh.subscribe(() => {
+            setCurrentTarget(mesh.getSelectedTarget());
+        });
+        return unsub;
+    }, []);
 
     const [notebook, setNotebook] = useState<NotebookRecord | null>(null);
     const [assets, setAssets] = useState<NotebookAssetRecord[]>([]);
@@ -69,20 +82,20 @@ export const NotebookDetailScreen: React.FC<Props> = ({
     const [ingestText, setIngestText] = useState<string | null>(null);
     const [metrics, setMetrics] = useState<PerformanceMetrics | null>(null);
 
-    // Modals
     const [isRegistryOpen, setRegistryOpen] = useState(false);
     const [selectedAsset, setSelectedAsset] = useState<NotebookAssetRecord | null>(null);
     const [isScratchpadOpen, setScratchpadOpen] = useState(false);
     const [scratchpadText, setScratchpadText] = useState('');
     const [isSavingScratchpad, setIsSavingScratchpad] = useState(false);
 
-    // Deep Synthesis State
     const [isSynthesizing, setIsSynthesizing] = useState(false);
     const [synthesisStatus, setSynthesisStatus] = useState<string | null>(null);
 
     const activeModel = llm.getLoadedModel();
     let badgeLabel = 'No Model Loaded';
-    if (activeModel) {
+    if (isRemoteTarget) {
+        badgeLabel = currentTarget.displayName;
+    } else if (activeModel) {
         badgeLabel = activeModel.isVisionCapable
             ? `Vision • ${activeModel.name}`
             : `Text • ${activeModel.name}`;
@@ -184,8 +197,8 @@ export const NotebookDetailScreen: React.FC<Props> = ({
             return;
         }
 
-        if (!llm.isReady()) {
-            Alert.alert('Model Required', 'Load a model to run synthesis.');
+        if (!isRemoteTarget && !llm.isReady()) {
+            Alert.alert('Model Required', 'Load a local model or select a remote compute node to run synthesis.');
             return;
         }
 
@@ -248,8 +261,8 @@ export const NotebookDetailScreen: React.FC<Props> = ({
         const query = prompt.trim();
         if (!query) return;
 
-        if (!llm.isReady()) {
-            Alert.alert('No Model Loaded', 'Tap the model badge above to select a model.');
+        if (!isRemoteTarget && !llm.isReady()) {
+            Alert.alert('No Model Loaded', 'Tap the compute selector or model badge to select a model.');
             return;
         }
 
@@ -313,6 +326,9 @@ export const NotebookDetailScreen: React.FC<Props> = ({
                 </TouchableOpacity>
             </View>
 
+            {/* Compute Target Switcher */}
+            <ComputeTargetSwitcher />
+
             {/* Action & Ingestion Toolbar */}
             <View style={styles.ingestBar}>
                 <TouchableOpacity style={styles.ingestBtn} onPress={handleAddPhoto}>
@@ -333,7 +349,6 @@ export const NotebookDetailScreen: React.FC<Props> = ({
                 </TouchableOpacity>
             </View>
 
-            {/* Deep Synthesis Progress Banner */}
             {isSynthesizing && (
                 <View style={styles.synthesisBanner}>
                     <ActivityIndicator color="#F59E0B" size="small" />
@@ -343,7 +358,6 @@ export const NotebookDetailScreen: React.FC<Props> = ({
                 </View>
             )}
 
-            {/* Ingestion Spinner Banner */}
             {isIngesting && (
                 <View style={styles.ingestingBanner}>
                     <ActivityIndicator color="#38BDF8" size="small" />
@@ -351,14 +365,12 @@ export const NotebookDetailScreen: React.FC<Props> = ({
                 </View>
             )}
 
-            {/* Horizontal Asset Shelf */}
             <View style={styles.shelfSection}>
                 <ScrollView
                     horizontal
                     showsHorizontalScrollIndicator={false}
                     contentContainerStyle={styles.shelfContent}
                 >
-                    {/* Global Selector */}
                     <TouchableOpacity
                         style={[
                             styles.shelfCard,
@@ -373,7 +385,6 @@ export const NotebookDetailScreen: React.FC<Props> = ({
                         <Text style={styles.shelfSub}>All {assets.length} assets</Text>
                     </TouchableOpacity>
 
-                    {/* Asset Items */}
                     {assets.map((item) => {
                         const isSelected = targetAssetId === item.id;
                         return (
@@ -410,7 +421,6 @@ export const NotebookDetailScreen: React.FC<Props> = ({
                 </ScrollView>
             </View>
 
-            {/* Scope Indicator */}
             <View style={styles.scopeBanner}>
                 <Text style={styles.scopeText}>
                     {targetAssetId && activeTargetAsset
@@ -419,7 +429,6 @@ export const NotebookDetailScreen: React.FC<Props> = ({
                 </Text>
             </View>
 
-            {/* Telemetry Bar */}
             {metrics && (
                 <View style={styles.telemetryBar}>
                     <Text style={styles.telemetryText}>
@@ -428,7 +437,6 @@ export const NotebookDetailScreen: React.FC<Props> = ({
                 </View>
             )}
 
-            {/* Message Feed */}
             <KeyboardAvoidingView
                 style={styles.flexFill}
                 behavior={Platform.OS === 'ios' ? 'padding' : 'height'}
@@ -447,7 +455,7 @@ export const NotebookDetailScreen: React.FC<Props> = ({
                             <Text style={styles.emptyDesc}>
                                 {targetAssetId
                                     ? 'Ask questions specifically grounded on this asset.'
-                                    : 'Ask comparison or synthesis questions across all assets in this notebook (e.g., "Compare prices and specs across all screenshots").'}
+                                    : 'Ask comparison or synthesis questions across all assets in this notebook.'}
                             </Text>
                         </View>
                     }
@@ -486,14 +494,15 @@ export const NotebookDetailScreen: React.FC<Props> = ({
                     }
                 />
 
-                {/* Input Bar */}
                 <View style={[styles.inputContainer, { paddingBottom: Math.max(insets.bottom, 8) }]}>
                     <TextInput
                         style={styles.textInput}
                         placeholder={
                             targetAssetId
                                 ? 'Ask about this asset...'
-                                : 'Query across all notebook assets...'
+                                : isRemoteTarget
+                                    ? `Query using ${currentTarget.displayName}...`
+                                    : 'Query across all notebook assets...'
                         }
                         placeholderTextColor="#64748B"
                         value={prompt}
@@ -517,7 +526,6 @@ export const NotebookDetailScreen: React.FC<Props> = ({
                 </View>
             </KeyboardAvoidingView>
 
-            {/* Asset Viewer Modal */}
             <AssetViewerModal
                 visible={!!selectedAsset}
                 asset={selectedAsset}
@@ -526,7 +534,6 @@ export const NotebookDetailScreen: React.FC<Props> = ({
                 onAssetDeleted={loadNotebookData}
             />
 
-            {/* Model Selector Modal */}
             <ModelRegistryModal
                 visible={isRegistryOpen}
                 onClose={() => setRegistryOpen(false)}
@@ -538,7 +545,6 @@ export const NotebookDetailScreen: React.FC<Props> = ({
                 }}
             />
 
-            {/* Global Notebook Scratchpad Modal */}
             <Modal visible={isScratchpadOpen} animationType="slide" transparent>
                 <View style={styles.modalOverlay}>
                     <View style={styles.scratchpadModal}>
@@ -754,8 +760,8 @@ const styles = StyleSheet.create({
         backgroundColor: '#1E293B',
         borderRadius: 12,
         padding: 16,
-        height: '82%', // Definite height for modal bounds
-        overflow: 'hidden', // Clips any inner overflow
+        height: '82%',
+        overflow: 'hidden',
     },
     scratchpadHeader: {
         flexDirection: 'row',
@@ -766,7 +772,7 @@ const styles = StyleSheet.create({
     scratchpadTitle: { color: '#F8FAFC', fontSize: 16, fontWeight: '700' },
     scratchpadClose: { color: '#38BDF8', fontSize: 14, fontWeight: '600' },
     scratchpadInput: {
-        flex: 1, // Fills all space between header and button & enables internal scroll
+        flex: 1,
         backgroundColor: '#0F172A',
         color: '#F8FAFC',
         borderRadius: 8,

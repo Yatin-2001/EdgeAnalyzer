@@ -278,52 +278,31 @@ export default function ChatScreen() {
     setStreamingContent('');
 
     try {
-      let fullText = '';
-      let generatedTokens = 0;
+      // 1. Build prompt context (Memories + Tool Signatures + Sliding Context Window)
+      const memoryContext = await memoryService.retrieveRelevantMemory(userText, activeConv.id);
+      const baseSystem =
+          (activeConv.system_prompt || 'You are a helpful, concise AI assistant running locally on-device.') +
+          memoryContext.formattedSystemContext;
 
-      if (isRemoteTarget) {
-        // ROUTE A: Remote Mesh Node (Desktop / Phone Worker)
-        const startTime = Date.now();
-        await mesh.streamChat(
-            updatedMessages.map((m) => ({ role: m.role, content: m.content })),
-            (token) => {
-              fullText += token;
-              generatedTokens++;
-              setStreamingContent((prev) => prev + token);
-            }
-        );
-        const durationSec = (Date.now() - startTime) / 1000;
-        setMetrics({
-          tokensPerSecond: durationSec > 0 ? parseFloat((generatedTokens / durationSec).toFixed(1)) : 0,
-          totalTokens: generatedTokens,
-          ttftMs: 45,
-          generationTimeSec: durationSec,
-        });
+      const systemWithTools = toolOrchestrator.formatSystemPromptWithTools(baseSystem, userText);
+      const formattedPrompt = ContextManager.buildSlidingContextPrompt(updatedMessages, systemWithTools, 'llama3');
 
-      } else {
-        // ROUTE B: On-Device Snapdragon (Direct JNI)
-        const memoryContext = await memoryService.retrieveRelevantMemory(userText, activeConv.id);
-        const baseSystem =
-            (activeConv.system_prompt || 'You are a helpful, concise AI assistant running locally on-device.') +
-            memoryContext.formattedSystemContext;
+      // 2. Execute the ReAct loop:
+      // - Thin client runs the tool loop and executes tools locally
+      // - Compute heavy token generation streams from local Adreno or remote OP 15 / Desktop RTX
+      const result = await toolOrchestrator.executeAgentLoop(formattedPrompt, userText, {
+        onToken: (token) => setStreamingContent((prev) => prev + token),
+        onMetrics: (m) => setMetrics(m),
+        onToolCallDetected: (toolName, _, step) => {
+          setStreamingContent((prev) => prev + `⚙️ [Step ${step}] Executing: ${toolName}...\n`);
+        },
+        onToolExecutionCompleted: (toolName, res, step) => {
+          setStreamingContent((prev) => prev + `✓ [Step ${step}] ${toolName} finished (${res.executionTimeMs}ms)\n\n`);
+        },
+      });
 
-        const systemWithTools = toolOrchestrator.formatSystemPromptWithTools(baseSystem, userText);
-        const formattedPrompt = ContextManager.buildSlidingContextPrompt(updatedMessages, systemWithTools, 'llama3');
-
-        const result = await toolOrchestrator.executeAgentLoop(formattedPrompt, userText, {
-          onToken: (token) => setStreamingContent((prev) => prev + token),
-          onMetrics: (m) => setMetrics(m),
-          onToolCallDetected: (toolName, _, step) => {
-            setStreamingContent((prev) => prev + `⚙️ [Step ${step}] Executing: ${toolName}...\n`);
-          },
-          onToolExecutionCompleted: (toolName, res, step) => {
-            setStreamingContent((prev) => prev + `✓ [Step ${step}] ${toolName} finished (${res.executionTimeMs}ms)\n\n`);
-          },
-        });
-
-        fullText = result.fullText;
-        generatedTokens = result.metrics.totalTokens;
-      }
+      const fullText = result.fullText;
+      const generatedTokens = result.metrics.totalTokens;
 
       const assistantMsg = await insertMessage(activeConv.id, 'assistant', fullText, generatedTokens);
       setMessages((prev) => [...prev, assistantMsg]);
