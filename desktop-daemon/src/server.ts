@@ -22,16 +22,38 @@ const wss = new WebSocketServer({ server, path: '/mcp' });
 app.use(cors());
 app.use(express.json({ limit: '50mb' }));
 
+// Replace getLocalNetworkIp() in desktop-daemon/src/server.ts:
 function getLocalNetworkIp(): string {
     const interfaces = os.networkInterfaces();
+    let fallbackIp = '127.0.0.1';
+
     for (const name of Object.keys(interfaces)) {
+        const lower = name.toLowerCase();
+        // Ignore virtual WSL, Docker, Hyper-V, VPN, and VirtualBox interfaces
+        if (
+            lower.includes('vethernet') ||
+            lower.includes('wsl') ||
+            lower.includes('docker') ||
+            lower.includes('vbox') ||
+            lower.includes('vmware') ||
+            lower.includes('loopback')
+        ) {
+            continue;
+        }
+
         for (const net of interfaces[name] || []) {
             if (net.family === 'IPv4' && !net.internal) {
-                return net.address;
+                // Prefer Wi-Fi or Local Area Connection (Hotspot)
+                if (lower.includes('wi-fi') || lower.includes('wlan') || lower.includes('local area connection')) {
+                    return net.address;
+                }
+                if (fallbackIp === '127.0.0.1') {
+                    fallbackIp = net.address;
+                }
             }
         }
     }
-    return '127.0.0.1';
+    return fallbackIp;
 }
 
 function normalizeIp(rawIp: string | undefined): string {
@@ -357,10 +379,12 @@ app.post('/api/mesh/devices/revoke', (req, res) => {
 });
 
 // 5. Ollama Telemetry Routes
-app.get('/api/mesh/telemetry', async (_req, res) => {
+// 5. Ollama Telemetry Routes
+app.get('/api/mesh/telemetry', async (req, res) => {
     const gpu = await telemetryService.getGpuStats();
     const systemRam = telemetryService.getSystemRamStats();
     const models = await ollama.listModels();
+    const clientIp = normalizeIp(req.socket.remoteAddress);
 
     let ollamaAllocation: OllamaModelAllocation = {
         name: null,
@@ -379,6 +403,10 @@ app.get('/api/mesh/telemetry', async (_req, res) => {
     } catch {}
 
     res.json({
+        nodeId: LOCAL_NODE_ID,
+        nodeName: `Desktop (${os.hostname()})`,
+        tier: 'thick_desktop',
+        clientIp,
         gpu,
         systemRam,
         ollama: ollamaAllocation,

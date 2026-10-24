@@ -1,4 +1,6 @@
 import { initLlama, LlamaContext } from 'llama.rn';
+import ModelFile from '../../modules/model-file/src/ModelFileModule';
+import { MeshIdentityService } from './MeshIdentityService';
 
 export type LLMStatus =
     | 'UNLOADED'
@@ -88,6 +90,168 @@ export class LLMService {
     return this.loadedModel;
   }
 
+  /**
+   * Unpacks pre-templated strings (Llama-3 or ChatML/Qwen2-VL) or __MESSAGES_JSON__ payloads
+   * into canonical { role, content } turns so the host phone can apply the loaded
+   * GGUF model's native chat/vision template.
+   */
+  public unpackTemplatedPrompt(rawPrompt: string): Array<{ role: string; content: string }> {
+    if (rawPrompt.startsWith('__MESSAGES_JSON__:')) {
+      try {
+        const parsed = JSON.parse(rawPrompt.slice('__MESSAGES_JSON__:'.length));
+        if (Array.isArray(parsed) && parsed.length > 0) {
+          if (
+              parsed.length === 1 &&
+              typeof parsed[0].content === 'string' &&
+              (parsed[0].content.includes('<|start_header_id|>') || parsed[0].content.includes('<|im_start|>'))
+          ) {
+            return this.unpackTemplatedPrompt(parsed[0].content);
+          }
+          return parsed.map((m: any) => ({
+            role: m.role === 'tool' ? 'user' : String(m.role || 'user'),
+            content: typeof m.content === 'string' ? m.content : JSON.stringify(m.content),
+          }));
+        }
+      } catch {}
+    }
+
+    const messages: Array<{ role: string; content: string }> = [];
+
+    if (rawPrompt.includes('<|start_header_id|>')) {
+      const regex = /<\|start_header_id\|>(system|user|assistant|tool)<\|end_header_id\|>([\s\S]*?)(?=<\|start_header_id\|>|<\|eot_id\|>|$)/g;
+      let match: RegExpExecArray | null;
+      while ((match = regex.exec(rawPrompt)) !== null) {
+        const rawRole = match[1];
+        const rawContent = match[2];
+        if (!rawRole || rawContent === undefined) continue;
+        const content = rawContent.replace(/<\|eot_id\|>/g, '').trim();
+        if (content.length > 0) {
+          messages.push({ role: rawRole === 'tool' ? 'user' : rawRole, content });
+        }
+      }
+    } else if (rawPrompt.includes('<|im_start|>')) {
+      const regex = /<\|im_start\|>(system|user|assistant|tool)\n?([\s\S]*?)(?=<\|im_start\|>|<\|im_end\|>|$)/g;
+      let match: RegExpExecArray | null;
+      while ((match = regex.exec(rawPrompt)) !== null) {
+        const rawRole = match[1];
+        const rawContent = match[2];
+        if (!rawRole || rawContent === undefined) continue;
+        // Strip trailing ChatML end tags while preserving inner Qwen2-VL vision tags if present
+        const content = rawContent.replace(/<\|im_end\|>/g, '').trim();
+        if (content.length > 0) {
+          messages.push({ role: rawRole === 'tool' ? 'user' : rawRole, content });
+        }
+      }
+    }
+
+    if (messages.length === 0 && rawPrompt.trim().length > 0) {
+      messages.push({ role: 'user', content: rawPrompt.trim() });
+    }
+
+    return messages;
+  }
+
+  /**
+   * Formats canonical { role, content } messages into the exact chat template
+   * expected by the currently loaded GGUF model on this phone (including Qwen2-VL / ChatML).
+   */
+  public formatPromptForLoadedModel(
+      messages: Array<{ role: string; content: string }>,
+      imageCount: number = 0
+  ): string {
+    const modelName = (this.loadedModel?.name || '').toLowerCase();
+    const isQwenVL =
+        modelName.includes('qwen2-vl') ||
+        modelName.includes('qwen2.5-vl') ||
+        modelName.includes('qwen-vl') ||
+        (modelName.includes('qwen') && this.loadedModel?.isVisionCapable);
+
+    // 1. Qwen2-VL / Qwen2.5-VL & ChatML Family (Qwen, SmolVLM, Yi, DeepSeek, Hermes)
+    if (
+        isQwenVL ||
+        this.loadedModel?.isVisionCapable ||
+        modelName.includes('qwen') ||
+        modelName.includes('smolvlm') ||
+        modelName.includes('yi') ||
+        modelName.includes('hermes')
+    ) {
+      const lastUserIdx = messages.map((m) => m.role).lastIndexOf('user');
+
+      return (
+          messages
+              .map((m, idx) => {
+                let body = m.content;
+                // If raw prompt formatting is used with Qwen2-VL and images are attached,
+                // prepend Qwen2-VL vision tokens if not already embedded
+                if (
+                    isQwenVL &&
+                    imageCount > 0 &&
+                    idx === lastUserIdx &&
+                    !body.includes('<|vision_start|>')
+                ) {
+                  const visionBlocks = Array(imageCount)
+                      .fill('<|vision_start|><|image_pad|><|vision_end|>')
+                      .join('');
+                  body = `${visionBlocks}${body}`;
+                }
+                return `<|im_start|>${m.role}\n${body}<|im_end|>`;
+              })
+              .join('\n') + '\n<|im_start|>assistant\n'
+      );
+    }
+
+    // 2. Microsoft Phi-3 / Phi-3.5
+    if (modelName.includes('phi')) {
+      return (
+          messages.map((m) => `<|${m.role}|>\n${m.content}<|end|>`).join('\n') +
+          '\n<|assistant|>\n'
+      );
+    }
+
+    // 3. Google Gemma / Gemma 2
+    if (modelName.includes('gemma')) {
+      let systemPrefix = '';
+      const turns: string[] = [];
+      for (const m of messages) {
+        if (m.role === 'system') {
+          systemPrefix += `${m.content}\n\n`;
+        } else {
+          const gemmaRole = m.role === 'assistant' ? 'model' : 'user';
+          const content = gemmaRole === 'user' && systemPrefix ? `${systemPrefix}${m.content}` : m.content;
+          if (gemmaRole === 'user') systemPrefix = '';
+          turns.push(`<start_of_turn>${gemmaRole}\n${content}<end_of_turn>`);
+        }
+      }
+      return turns.join('\n') + '\n<start_of_turn>model\n';
+    }
+
+    // 4. Mistral / Mixtral Instruct
+    if (modelName.includes('mistral') || modelName.includes('mixtral')) {
+      let systemPrefix = '';
+      const turns: string[] = [];
+      for (const m of messages) {
+        if (m.role === 'system') {
+          systemPrefix += `${m.content}\n\n`;
+        } else if (m.role === 'user') {
+          turns.push(`[INST] ${systemPrefix}${m.content} [/INST]`);
+          systemPrefix = '';
+        } else if (m.role === 'assistant') {
+          turns.push(`${m.content}</s>`);
+        }
+      }
+      return turns.join(' ');
+    }
+
+    // 5. Default: Llama-3 / Llama-3.1 / Llama-3.2
+    return (
+        '<|begin_of_text|>' +
+        messages
+            .map((m) => `<|start_header_id|>${m.role}<|end_header_id|>\n\n${m.content}<|eot_id|>`)
+            .join('') +
+        '<|start_header_id|>assistant<|end_header_id|>\n\n'
+    );
+  }
+
   public async loadModel(
       modelPath: string,
       modelName: string,
@@ -152,6 +316,13 @@ export class LLMService {
         isVisionCapable: isVisionActive,
       };
       this.status = 'READY';
+
+      // Sync active model name & persistent node identity with native EdgeComputeWorkerService
+      try {
+        await ModelFile.setWorkerActiveModel(modelName);
+        const identity = await MeshIdentityService.getInstance().getOrCreateIdentity();
+        await ModelFile.setWorkerNodeIdentity?.(identity.node_id, identity.node_name);
+      } catch {}
     } catch (error) {
       this.context = null;
       this.loadedModel = null;
@@ -191,25 +362,46 @@ export class LLMService {
 
     let messagesPayload: ChatMessage[] | undefined = options.messages;
 
+    // Multimodal Vision Path (Qwen2-VL, SmolVLM, LLaVA):
+    // Unpack any pre-templated prompt into clean turns and attach image_url parts to the final user turn
     if (!messagesPayload && options.imagePaths && options.imagePaths.length > 0) {
-      const contentParts: MessageContentPart[] = [
-        { type: 'text', text: options.prompt || 'Describe and analyze this image.' },
-      ];
+      const rawPrompt = options.prompt || 'Describe and analyze this image.';
+      const unpacked =
+          rawPrompt.includes('<|start_header_id|>') ||
+          rawPrompt.includes('<|im_start|>') ||
+          rawPrompt.startsWith('__MESSAGES_JSON__:')
+              ? this.unpackTemplatedPrompt(rawPrompt)
+              : [{ role: 'user', content: rawPrompt }];
 
-      for (const imgPath of options.imagePaths) {
+      const imageParts: MessageContentPart[] = options.imagePaths.map((imgPath) => {
         const cleanUri = imgPath.startsWith('file://') ? imgPath : `file://${imgPath}`;
-        contentParts.push({
+        return {
           type: 'image_url',
           image_url: { url: cleanUri },
-        });
-      }
+        };
+      });
 
-      messagesPayload = [
-        {
-          role: 'user',
-          content: contentParts,
-        },
-      ];
+      const lastUserIdx = unpacked.map((m) => m.role).lastIndexOf('user');
+      messagesPayload = unpacked.map((m, idx) => {
+        if (idx === lastUserIdx || (lastUserIdx === -1 && idx === unpacked.length - 1)) {
+          // Place image_url parts before text (standard Qwen2-VL & SmolVLM multimodal order)
+          const cleanText = m.content
+              .replace(/<\|vision_start\|>[\s\S]*?<\|vision_end\|>/g, '')
+              .replace(/<\|image_pad\|>/g, '')
+              .trim();
+          return {
+            role: 'user',
+            content: [
+              ...imageParts,
+              { type: 'text', text: cleanText || 'Describe and analyze this image.' },
+            ],
+          };
+        }
+        return {
+          role: (m.role === 'system' || m.role === 'assistant' ? m.role : 'user') as 'system' | 'user' | 'assistant',
+          content: m.content,
+        };
+      });
     }
 
     try {
@@ -217,15 +409,24 @@ export class LLMService {
         n_predict: options.nPredict ?? 512,
         temperature: options.temperature ?? 0.3,
         top_p: options.topP ?? 0.9,
-        // Anti-repetition penalties in llama.rn format
         penalty_repeat: options.repeatPenalty ?? 1.18,
         penalty_present: 0.15,
         penalty_last_n: 64,
         stop: options.stop ?? [
           '<|eot_id|>',
           '<|end_of_text|>',
+          '<|end|>',
           '<|im_end|>',
+          '<|im_start|>',
           '<|endoftext|>',
+          '<|vision_end|>',
+          '<end_of_turn>',
+          '<|user|>',
+          '<|system|>',
+          '### AVAILABLE TOOLS',
+          '### EXAMPLES',
+          '\nQuery:',
+          '\nUser:',
           'User:',
           'Assistant:',
           '</s>',
@@ -235,7 +436,16 @@ export class LLMService {
       if (messagesPayload) {
         completionConfig.messages = messagesPayload as any;
       } else {
-        completionConfig.prompt = options.prompt || '';
+        let rawPrompt = options.prompt || '';
+        if (
+            rawPrompt.startsWith('__MESSAGES_JSON__:') ||
+            rawPrompt.includes('<|start_header_id|>') ||
+            rawPrompt.includes('<|im_start|>')
+        ) {
+          const unpacked = this.unpackTemplatedPrompt(rawPrompt);
+          rawPrompt = this.formatPromptForLoadedModel(unpacked);
+        }
+        completionConfig.prompt = rawPrompt;
       }
 
       const result = await this.context.completion(
@@ -280,14 +490,36 @@ export class LLMService {
     if (!this.context || this.status !== 'READY') return '';
 
     try {
+      let normalizedPrompt = formattedPrompt;
+      if (
+          normalizedPrompt.startsWith('__MESSAGES_JSON__:') ||
+          normalizedPrompt.includes('<|start_header_id|>') ||
+          normalizedPrompt.includes('<|im_start|>')
+      ) {
+        const unpacked = this.unpackTemplatedPrompt(normalizedPrompt);
+        normalizedPrompt = this.formatPromptForLoadedModel(unpacked);
+      }
+
       const res = await this.context.completion({
-        prompt: formattedPrompt,
+        prompt: normalizedPrompt,
         n_predict: maxTokens,
         temperature: 0.1,
         penalty_repeat: 1.18,
-        penalty_present: 0.15,
+        penalty_present: 1.15,
         penalty_last_n: 64,
-        stop: ['<|eot_id|>', '<|end_of_text|>', '<|im_end|>', '<|endoftext|>'],
+        stop: [
+          '<|eot_id|>',
+          '<|end_of_text|>',
+          '<|end|>',
+          '<|im_end|>',
+          '<|im_start|>',
+          '<|endoftext|>',
+          '<end_of_turn>',
+          '### AVAILABLE TOOLS',
+          '### EXAMPLES',
+          '\nQuery:',
+          '\nUser:',
+        ],
       } as any);
       return res.text || '';
     } catch (error) {
@@ -300,10 +532,13 @@ export class LLMService {
     if (!this.context || this.status !== 'READY') return 'New Conversation';
 
     try {
-      const isChatML = this.loadedModel?.isVisionCapable;
-      const prompt = isChatML
-          ? `<|im_start|>system\nCreate a 3-5 word concise title for this query. Output ONLY the title text.<|im_end|>\n<|im_start|>user\n${firstUserPrompt}<|im_end|>\n<|im_start|>assistant\n`
-          : `<|begin_of_text|><|start_header_id|>system<|end_header_id|>\n\nCreate a 3-5 word concise title for this query. Output ONLY the title text.<|eot_id|><|start_header_id|>user<|end_header_id|>\n\n${firstUserPrompt}<|eot_id|><|start_header_id|>assistant<|end_header_id|>\n\n`;
+      const prompt = this.formatPromptForLoadedModel([
+        {
+          role: 'system',
+          content: 'Create a 3-5 word concise title for this query. Output ONLY the title text.',
+        },
+        { role: 'user', content: firstUserPrompt },
+      ]);
 
       const text = await this.completeNonStreaming(prompt, 16);
       const clean = text.replace(/["'\n]/g, '').trim();

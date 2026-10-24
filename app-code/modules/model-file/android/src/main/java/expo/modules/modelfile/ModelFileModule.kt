@@ -9,6 +9,8 @@ import android.util.Log
 import expo.modules.kotlin.modules.Module
 import expo.modules.kotlin.modules.ModuleDefinition
 import java.io.File
+import java.net.Inet4Address
+import java.net.NetworkInterface
 
 class ModelFileModule : Module() {
 
@@ -175,6 +177,43 @@ class ModelFileModule : Module() {
             EdgeComputeWorkerService.activeModelName = modelName
             Log.d("ModelFileModule", "setWorkerActiveModel: $modelName")
             return@AsyncFunction true
+        }
+
+        AsyncFunction("setWorkerNodeIdentity") { nodeId: String, nodeName: String ->
+            EdgeComputeWorkerService.activeNodeId = nodeId
+            EdgeComputeWorkerService.activeNodeName = nodeName
+            Log.d("ModelFileModule", "setWorkerNodeIdentity: $nodeName ($nodeId)")
+            return@AsyncFunction true
+        }
+
+        AsyncFunction("getLocalIpAddress") {
+            try {
+                var fallbackIp: String? = null
+                val interfaces = NetworkInterface.getNetworkInterfaces()
+                while (interfaces.hasMoreElements()) {
+                    val iface = interfaces.nextElement()
+                    if (iface.isLoopback || !iface.isUp) continue
+                    val name = iface.name.lowercase()
+                    // Skip cellular/tunnel interfaces
+                    if (name.startsWith("rmnet") || name.startsWith("tun") || name.startsWith("dummy")) continue
+
+                    val addresses = iface.inetAddresses
+                    while (addresses.hasMoreElements()) {
+                        val addr = addresses.nextElement()
+                        if (!addr.isLoopbackAddress && addr is Inet4Address) {
+                            val ip = addr.hostAddress ?: continue
+                            // Prefer Wi-Fi / Hotspot interfaces (wlan0, ap0, swlan0)
+                            if (name.contains("wlan") || name.contains("ap") || name.contains("wifi")) {
+                                return@AsyncFunction ip
+                            }
+                            if (fallbackIp == null) fallbackIp = ip
+                        }
+                    }
+                }
+                return@AsyncFunction fallbackIp ?: ""
+            } catch (e: Exception) {
+                return@AsyncFunction ""
+            }
         }
 
         AsyncFunction("pushWorkerToken") { requestId: String, token: String ->

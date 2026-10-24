@@ -1171,3 +1171,12 @@ export async function upsertMeshPeer(
       [nodeId, nodeName, deviceTier, sharedToken, ip, port, capabilitiesJson ?? null, now, now]
   );
 }
+
+export async function deleteMeshPeer(nodeId: string): Promise<void> {
+  try {
+    const db = await getDatabase();
+    await db.runAsync('DELETE FROM mesh_peers WHERE node_id = ?;', [nodeId]);
+  } catch (err) {
+    console.warn('[Repository] deleteMeshPeer failed:', err);
+  }
+}

@@ -19,10 +19,12 @@ interface ModelFileModule {
       fileUri: string,
   ): Promise<boolean>;
 
-  // Worker Lifecycle & Dynamic Model Sync
+  // Worker Lifecycle & Dynamic Model/Identity Sync
   startWorkerService(): Promise<boolean>;
   stopWorkerService(): Promise<boolean>;
   setWorkerActiveModel(modelName: string): Promise<boolean>;
+  setWorkerNodeIdentity?(nodeId: string, nodeName: string): Promise<boolean>;
+  getLocalIpAddress?(): Promise<string>;
 
   // Token Streaming Bridge from React Native to Native HTTP Server
   pushWorkerToken(requestId: string, token: string): Promise<boolean>;

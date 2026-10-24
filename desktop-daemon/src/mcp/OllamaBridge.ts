@@ -115,13 +115,22 @@ export class OllamaBridge {
                 messages: normalizedMessages,
                 stream: true,
                 options: {
-                    // Universal stop tokens to prevent runaway streams on any model
+                    temperature: 0.2,
+                    num_predict: 512,
+                    // Universal stop tokens + anti-echo guards for Phi-3.5 and smaller models
                     stop: [
                         '<|eot_id|>',
                         '<|end_of_text|>',
                         '<|end|>',
                         '<|im_end|>',
+                        '<|user|>',
+                        '<|system|>',
                         '</s>',
+                        '### AVAILABLE TOOLS',
+                        '### RULES FOR TOOL USE',
+                        '### EXAMPLES',
+                        '\nQuery:',
+                        '\nUser:',
                     ],
                 },
             }),

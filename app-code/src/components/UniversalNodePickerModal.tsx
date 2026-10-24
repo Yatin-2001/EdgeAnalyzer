@@ -6,8 +6,10 @@ import {
     Modal,
     TouchableOpacity,
     ScrollView,
+    Alert,
 } from 'react-native';
 import {
+    MeshClientService,
     MeshNodeEndpoint,
     UnifiedComputeTarget,
 } from '../services/MeshClientService';
@@ -28,6 +30,7 @@ export const UniversalNodePickerModal: React.FC<Props> = ({
                                                               onSelectTarget,
                                                               onClose,
                                                           }) => {
+    const mesh = MeshClientService.getInstance();
     const [localNodeName, setLocalNodeName] = useState('This Device');
     const [localTier, setLocalTier] = useState<string>('thick_mobile');
 
@@ -43,6 +46,27 @@ export const UniversalNodePickerModal: React.FC<Props> = ({
     const computeProviderNodes = nodes.filter(
         (n) => n.deviceTier === 'thick_desktop' || n.deviceTier === 'thick_mobile'
     );
+
+    const handleDeletePeer = (nodeId: string, nodeName: string) => {
+        Alert.alert(
+            'Forget Paired Node',
+            `Warning: Deleting "${nodeName}" will remove its pairing token from local database. You will need to re-pair with the desktop daemon to reconnect.`,
+            [
+                { text: 'Cancel', style: 'cancel' },
+                {
+                    text: 'Delete',
+                    style: 'destructive',
+                    onPress: async () => {
+                        try {
+                            await mesh.deletePeer(nodeId);
+                        } catch (err) {
+                            Alert.alert('Error', 'Failed to remove peer device.');
+                        }
+                    },
+                },
+            ]
+        );
+    };
 
     return (
         <Modal visible={visible} animationType="fade" transparent onRequestClose={onClose}>
@@ -108,19 +132,28 @@ export const UniversalNodePickerModal: React.FC<Props> = ({
                                 return (
                                     <View key={node.nodeId} style={styles.nodeBlock}>
                                         <View style={styles.nodeHeader}>
-                                            <Text style={styles.nodeName}>
+                                            <Text style={styles.nodeName} numberOfLines={1}>
                                                 {icon} {node.nodeName}
                                             </Text>
-                                            <View style={styles.nodeStatus}>
-                                                <View
-                                                    style={[
-                                                        styles.statusDot,
-                                                        node.isOnline ? styles.dotOnline : styles.dotOffline,
-                                                    ]}
-                                                />
-                                                <Text style={styles.latencyText}>
-                                                    {node.isOnline ? `${node.latencyMs}ms` : 'Offline'}
-                                                </Text>
+                                            <View style={styles.nodeActionsRow}>
+                                                <View style={styles.nodeStatus}>
+                                                    <View
+                                                        style={[
+                                                            styles.statusDot,
+                                                            node.isOnline ? styles.dotOnline : styles.dotOffline,
+                                                        ]}
+                                                    />
+                                                    <Text style={styles.latencyText}>
+                                                        {node.isOnline ? `${node.latencyMs}ms` : 'Offline'}
+                                                    </Text>
+                                                </View>
+                                                <TouchableOpacity
+                                                    style={styles.deletePeerBtn}
+                                                    onPress={() => handleDeletePeer(node.nodeId, node.nodeName)}
+                                                    hitSlop={{ top: 8, bottom: 8, left: 8, right: 8 }}
+                                                >
+                                                    <Text style={styles.deletePeerText}>🗑️</Text>
+                                                </TouchableOpacity>
                                             </View>
                                         </View>
 
@@ -230,12 +263,15 @@ const styles = StyleSheet.create({
         alignItems: 'center',
         marginBottom: 8,
     },
-    nodeName: { color: '#38BDF8', fontSize: 13, fontWeight: '700' },
+    nodeName: { color: '#38BDF8', fontSize: 13, fontWeight: '700', flex: 1, marginRight: 8 },
+    nodeActionsRow: { flexDirection: 'row', alignItems: 'center', gap: 10 },
     nodeStatus: { flexDirection: 'row', alignItems: 'center', gap: 6 },
     statusDot: { width: 6, height: 6, borderRadius: 3 },
     dotOnline: { backgroundColor: '#10B981' },
     dotOffline: { backgroundColor: '#EF4444' },
     latencyText: { color: '#94A3B8', fontSize: 11 },
+    deletePeerBtn: { padding: 2 },
+    deletePeerText: { fontSize: 13 },
     modelItem: {
         flexDirection: 'row',
         alignItems: 'center',

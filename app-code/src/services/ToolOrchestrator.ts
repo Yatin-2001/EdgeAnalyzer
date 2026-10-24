@@ -8,6 +8,8 @@ export interface OrchestrationCallbacks extends StreamCallbacks {
     onToolExecutionCompleted?: (toolName: string, result: ToolResult, step: number) => void;
 }
 
+const mathRegex = /([\d\.]+\s*[\+\-\*\/\^%]\s*[\d\.\+\-\*\/\^%\s\(\)]+)/;
+
 export class ToolOrchestrator {
     private static instance: ToolOrchestrator;
     private registry = ToolRegistry.getInstance();
@@ -53,18 +55,23 @@ export class ToolOrchestrator {
             temporalContext +
             `### AVAILABLE TOOLS:\n${signatures}\n\n` +
             `### RULES FOR TOOL USE:\n` +
-            `1. You can ONLY use the tools listed above. NEVER invent new tool names.\n` +
-            `2. For current facts, YouTube channels, links, video info, currency rates, or search, use: web_search\n` +
-            `3. For ANY math, arithmetic, or computation, you MUST call: calculator\n` +
-            `4. For device coordinates (e.g. "where am I"), use: device_location\n` +
-            `5. For ANY weather query, you MUST call: weather. If no specific city is requested by the user, you MUST set "location": "current_location".\n` +
-            `6. Output ONLY a raw JSON call when invoking a tool:\n` +
-            `{"tool": "<tool_name>", "parameters": {<key>: <value>}}\n\n` +
+            `1. You can ONLY use the exact tools listed above (calculator, web_search, device_location, weather). NEVER invent new tool names.\n` +
+            `2. If the user greets you (e.g. "Hello", "Hi") or asks a general question that does not require a tool, respond naturally in plain text. Do NOT output JSON or mention tools.\n` +
+            `3. For current facts, YouTube channels, links, video info, currency rates, or search, use: web_search\n` +
+            `4. For ANY math, arithmetic, or computation, you MUST call: calculator\n` +
+            `5. For device coordinates (e.g. "where am I"), use: device_location\n` +
+            `6. For ANY weather query, you MUST call: weather. If no specific city is requested by the user, you MUST set "location": "current_location".\n` +
+            `7. Output ONLY a raw JSON call when invoking a tool:\n` +
+            `{"tool": "<tool_name>", "parameters": {"<key>": "<value>"}}\n\n` +
             `### EXAMPLES:\n` +
-            `User: What is 1/0.01034?\n` +
-            `Assistant: {"tool": "calculator", "parameters": {"expression": "1/0.01034"}}\n\n` +
-            `User: Who made this video?\n` +
-            `Assistant: {"tool": "web_search", "parameters": {"query": "video title from image"}}\n\n` +
+            `Query: Hello!\n` +
+            `Output: Hello! How can I help you today?\n\n` +
+            `Query: What is 1/0.01034?\n` +
+            `Output: {"tool": "calculator", "parameters": {"expression": "1/0.01034"}}\n\n` +
+            `Query: What is the weather right now?\n` +
+            `Output: {"tool": "weather", "parameters": {"location": "current_location"}}\n\n` +
+            `Query: Who made this video?\n` +
+            `Output: {"tool": "web_search", "parameters": {"query": "video title from image"}}\n\n` +
             `When tool output is provided, synthesize your response directly in plain language without further JSON.`
         );
     }
@@ -294,7 +301,7 @@ export class ToolOrchestrator {
         }
         if (/\b(calculate|compute|solve|math)\b/i.test(q)) {
             const expr = q.replace(/calculate|compute|solve|math|what is|how much is/gi, '').trim();
-            if (expr.length > 0) {
+            if (expr.length > 0 && /\d/.test(expr)) {
                 return { tool: 'calculator', parameters: { expression: expr } };
             }
         }
@@ -323,7 +330,13 @@ export class ToolOrchestrator {
     private parseAndNormalizeToolCall(output: string): ToolCallPayload | null {
         if (!output || typeof output !== 'string') return null;
 
-        const objects = this.extractAllJsonObjects(output);
+        const trimmed = output.trim();
+        // Guard against extracting hallucinated JSON buried inside a long essay
+        if (trimmed.length > 350 && !trimmed.startsWith('{') && !trimmed.startsWith('```')) {
+            return null;
+        }
+
+        const objects = this.extractAllJsonObjects(trimmed);
         for (const obj of objects) {
             if (typeof obj !== 'object' || obj === null) continue;
 
@@ -411,9 +424,9 @@ export class ToolOrchestrator {
                         const rawJson = text.substring(startIndex, i + 1);
                         try {
                             const cleaned = rawJson
-                                .replace(/\/\/.*\$/gm, '')
+                                .replace(/\/\/.*$/gm, '')
                                 .replace(/\/\*[\s\S]*?\*\//g, '')
-                                .replace(/,(\s*[}\]])/g, '\$1')
+                                .replace(/,(\s*[}\]])/g, '$1')
                                 .trim();
 
                             const parsed = JSON.parse(cleaned);
@@ -428,5 +441,3 @@ export class ToolOrchestrator {
         return results;
     }
 }
-
-const mathRegex = /([\d\.]+\s*[\+\-\*\/\^%]\s*[\d\.\+\-\*\/\^%\s\(\)]+)/;

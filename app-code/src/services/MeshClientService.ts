@@ -1,12 +1,13 @@
-import * as SecureStore from 'expo-secure-store';
 import {
     getAllTrustedPeers,
     upsertMeshPeer,
     upsertMeshNodeConfig,
+    deleteMeshPeer,
     MeshPeerRecord,
     DeviceTier,
 } from '../database/repository';
 import { MeshIdentityService } from './MeshIdentityService';
+import ModelFile from '../../modules/model-file/src/ModelFileModule';
 
 export interface MeshNodeEndpoint {
     nodeId: string;
@@ -33,6 +34,8 @@ export class MeshClientService {
     private persistentWs: WebSocket | null = null;
     private heartbeatInterval: ReturnType<typeof setInterval> | null = null;
     private activeWsNodeId: string | null = null;
+    private isHealingSubnet = false;
+    private lastSubnetSweepAt = 0;
 
     private selectedTarget: UnifiedComputeTarget = {
         nodeId: 'local_engine',
@@ -76,20 +79,43 @@ export class MeshClientService {
         return Array.from(this.activeNodes.values());
     }
 
+    public async deletePeer(nodeId: string): Promise<void> {
+        await deleteMeshPeer(nodeId);
+        this.activeNodes.delete(nodeId);
+        if (this.selectedTarget.nodeId === nodeId) {
+            this.setSelectedTarget({
+                nodeId: 'local_engine',
+                modelName: 'On-Device GGUF',
+                displayName: '📱 Local: Snapdragon (Direct)',
+                deviceTier: 'thick_mobile',
+            });
+        }
+        this.notify();
+    }
+
     public async pairWithNode(ip: string, port: number, pin: string): Promise<void> {
         const identityService = MeshIdentityService.getInstance();
         const identity = await identityService.getOrCreateIdentity();
 
-        const res = await fetch(`http://${ip}:${port}/api/mesh/pair`, {
-            method: 'POST',
-            headers: { 'Content-Type': 'application/json' },
-            body: JSON.stringify({
-                pin,
-                deviceId: identity.node_id,
-                deviceName: identity.node_name,
-                deviceTier: identity.node_tier,
-            }),
-        });
+        const cleanIp = ip.trim().replace(/^https?:\/\//i, '').replace(/:\d+$/, '');
+        const targetPort = port || 8080;
+        const url = `http://${cleanIp}:${targetPort}/api/mesh/pair`;
+
+        let res: Response;
+        try {
+            res = await fetch(url, {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({
+                    pin: pin.trim(),
+                    deviceId: identity.node_id,
+                    deviceName: identity.node_name,
+                    deviceTier: identity.node_tier,
+                }),
+            });
+        } catch (netErr: any) {
+            throw new Error(`Cannot reach [${url}]: ${netErr?.message || String(netErr)}`);
+        }
 
         if (!res.ok) {
             const err = await res.json().catch(() => ({}));
@@ -99,11 +125,11 @@ export class MeshClientService {
         const data = await res.json();
         const token = data.meshToken;
 
-        const peerNodeId = data.peerNodeId || `node_${ip.replace(/\./g, '_')}`;
-        const peerName = data.peerName || (port === 8080 ? 'Desktop PC' : 'Mobile Worker');
-        const peerTier: DeviceTier = port === 8080 ? 'thick_desktop' : 'thick_mobile';
+        const peerNodeId = data.peerNodeId || `node_${cleanIp.replace(/\./g, '_')}`;
+        const peerName = data.peerName || (targetPort === 8080 ? 'Desktop PC' : 'Mobile Worker');
+        const peerTier: DeviceTier = targetPort === 8080 ? 'thick_desktop' : 'thick_mobile';
 
-        await upsertMeshPeer(peerNodeId, peerName, peerTier, token, ip, port);
+        await upsertMeshPeer(peerNodeId, peerName, peerTier, token, cleanIp, targetPort);
 
         if (Array.isArray(data.knownPeers)) {
             for (const peer of data.knownPeers) {
@@ -118,7 +144,7 @@ export class MeshClientService {
                         peer.deviceName || 'Mesh Peer',
                         peer.deviceTier || 'thick_mobile',
                         peer.meshToken || token,
-                        peer.network?.ip || ip,
+                        peer.network?.ip || cleanIp,
                         designatedPort
                     );
                 }
@@ -141,15 +167,24 @@ export class MeshClientService {
     public async scanAndSyncPeers(): Promise<void> {
         try {
             const identity = await MeshIdentityService.getInstance().getOrCreateIdentity();
+            // Ensure local worker service always knows its own persistent node_id
+            try {
+                await ModelFile.setWorkerNodeIdentity?.(identity.node_id, identity.node_name);
+            } catch {}
+
             const peers = await getAllTrustedPeers();
 
             // 1. Pull full cluster roster from any reachable desktop node
             const desktopPeer = peers.find((p) => p.device_tier === 'thick_desktop');
             if (desktopPeer) {
                 try {
+                    const controller = new AbortController();
+                    const timeout = setTimeout(() => controller.abort(), 2000);
                     const clusterRes = await fetch(
-                        `http://${desktopPeer.last_known_ip}:${desktopPeer.last_known_port}/api/mesh/cluster/peers`
+                        `http://${desktopPeer.last_known_ip}:${desktopPeer.last_known_port}/api/mesh/cluster/peers`,
+                        { signal: controller.signal }
                     );
+                    clearTimeout(timeout);
                     if (clusterRes.ok) {
                         const clusterData = await clusterRes.json();
                         if (Array.isArray(clusterData.peers)) {
@@ -168,13 +203,15 @@ export class MeshClientService {
                         }
                     }
                 } catch {
-                    // Desktop unreachable; continue probing peers locally
+                    // Desktop unreachable at last_known_ip; subnet healer will handle it below
                 }
             }
 
             // 2. Refresh local trusted peer list from SQLite
             const updatedPeers = await getAllTrustedPeers();
             if (!updatedPeers || updatedPeers.length === 0) return;
+
+            const unreachablePeers: MeshPeerRecord[] = [];
 
             // 3. Probe all known peers across the network
             await Promise.all(
@@ -187,7 +224,7 @@ export class MeshClientService {
 
                     try {
                         const controller = new AbortController();
-                        const timeout = setTimeout(() => controller.abort(), 2500);
+                        const timeout = setTimeout(() => controller.abort(), 2200);
 
                         const res = await fetch(`http://${peer.last_known_ip}:${targetPort}/api/mesh/telemetry`, {
                             signal: controller.signal,
@@ -217,17 +254,135 @@ export class MeshClientService {
                             });
                         } else {
                             this.markOffline(peer, targetPort);
+                            unreachablePeers.push(peer);
                         }
                     } catch {
                         this.markOffline(peer, targetPort);
+                        unreachablePeers.push(peer);
                     }
                 })
             );
 
             this.ensurePersistentConnection();
             this.notify();
+
+            // 4. Zero-Touch Wi-Fi Roaming: If any trusted peers timed out, run background /24 subnet sweep
+            if (
+                unreachablePeers.length > 0 &&
+                !this.isHealingSubnet &&
+                Date.now() - this.lastSubnetSweepAt > 30000
+            ) {
+                this.healUnreachablePeers(unreachablePeers, identity.node_id).catch(() => {});
+            }
         } catch (err) {
             console.warn('[MeshClientService] scanAndSyncPeers error:', err);
+        }
+    }
+
+    /**
+     * Auto-IP Healer: Sweeps the current /24 Wi-Fi subnet when trusted peers change IPs
+     * (e.g. moving from PG Wi-Fi to Home Wi-Fi or Hotspot) and updates SQLite automatically.
+     */
+    private async healUnreachablePeers(
+        offlinePeers: MeshPeerRecord[],
+        selfNodeId: string
+    ): Promise<void> {
+        this.isHealingSubnet = true;
+        this.lastSubnetSweepAt = Date.now();
+
+        try {
+            let localIp = '';
+            try {
+                localIp = (await ModelFile.getLocalIpAddress?.()) || '';
+            } catch {}
+
+            if (!localIp) {
+                const onlineNode = Array.from(this.activeNodes.values()).find((n) => n.isOnline);
+                if (onlineNode) localIp = onlineNode.ip;
+            }
+
+            const octets = localIp.split('.');
+            if (octets.length !== 4) return;
+
+            const subnetPrefix = `${octets[0]}.${octets[1]}.${octets[2]}`;
+            const selfHost = parseInt(octets[3], 10);
+
+            const portsToProbe = Array.from(
+                new Set(
+                    offlinePeers.map((p) =>
+                        p.device_tier === 'thick_mobile' ? 8765 : (p.last_known_port || 8080)
+                    )
+                )
+            );
+
+            console.log(
+                `[Mesh Auto-Heal] 🔍 Sweeping subnet ${subnetPrefix}.1-254 across port(s) [${portsToProbe.join(', ')}] for ${offlinePeers.length} offline peer(s)...`
+            );
+
+            let healedAny = false;
+            const candidateHosts: number[] = [];
+            // Prioritize gateway/low DHCP (.1 - .20) and common hotspot ranges first
+            for (let i = 1; i <= 254; i++) {
+                if (i !== selfHost) candidateHosts.push(i);
+            }
+
+            const BATCH_SIZE = 32;
+            for (let i = 0; i < candidateHosts.length; i += BATCH_SIZE) {
+                const batch = candidateHosts.slice(i, i + BATCH_SIZE);
+
+                await Promise.all(
+                    batch.map(async (hostNum) => {
+                        const candidateIp = `${subnetPrefix}.${hostNum}`;
+                        for (const port of portsToProbe) {
+                            try {
+                                const controller = new AbortController();
+                                const timer = setTimeout(() => controller.abort(), 450);
+                                const res = await fetch(`http://${candidateIp}:${port}/api/mesh/telemetry`, {
+                                    signal: controller.signal,
+                                });
+                                clearTimeout(timer);
+
+                                if (!res.ok) continue;
+                                const data = await res.json();
+                                if (data.nodeId && data.nodeId === selfNodeId) continue;
+
+                                // Match by persistent nodeId first, or by nodeName + tier fallback
+                                const matchedPeer = offlinePeers.find(
+                                    (p) =>
+                                        (data.nodeId && p.node_id === data.nodeId) ||
+                                        (data.nodeName && p.node_name === data.nodeName) ||
+                                        (port === 8080 && p.device_tier === 'thick_desktop' && offlinePeers.filter((x) => x.device_tier === 'thick_desktop').length === 1)
+                                );
+
+                                if (matchedPeer && matchedPeer.last_known_ip !== candidateIp) {
+                                    console.log(
+                                        `[Mesh Auto-Heal] ✅ Healed peer "${matchedPeer.node_name}" (${matchedPeer.node_id}): ${matchedPeer.last_known_ip} -> ${candidateIp}:${port}`
+                                    );
+                                    await upsertMeshPeer(
+                                        matchedPeer.node_id,
+                                        data.nodeName || matchedPeer.node_name,
+                                        matchedPeer.device_tier,
+                                        matchedPeer.shared_token,
+                                        candidateIp,
+                                        port
+                                    );
+                                    healedAny = true;
+                                }
+                            } catch {
+                                // Host/port closed or timed out
+                            }
+                        }
+                    })
+                );
+
+                if (healedAny) break;
+            }
+
+            if (healedAny) {
+                await this.scanAndSyncPeers();
+            }
+        } finally {
+            this.isHealingSubnet = false;
         }
     }
 
@@ -279,7 +434,6 @@ export class MeshClientService {
                 this.startHeartbeat(ws);
             };
 
-            // Ingest peer sync & peer join notifications pushed from Desktop
             ws.onmessage = async (event) => {
                 try {
                     const msg = JSON.parse(event.data.toString());
@@ -313,9 +467,7 @@ export class MeshClientService {
                         }
                         await this.scanAndSyncPeers();
                     }
-                } catch {
-                    // Ignore ping/pong or malformed messages
-                }
+                } catch {}
             };
 
             ws.onclose = () => {
@@ -377,13 +529,7 @@ export class MeshClientService {
         }
 
         if (node.deviceTier === 'thick_mobile') {
-            // If already formatted with prompt markers (ChatML or Header IDs), pass directly
-            const prompt =
-                messages.length === 1 && (messages[0].content.includes('<|im_start|>') || messages[0].content.includes('<|start_header_id|>'))
-                    ? messages[0].content
-                    : messages.map((m) => `${m.role}: ${m.content}`).join('\n');
-
-            await this.streamFromMobileWorker(node, prompt, onToken);
+            await this.streamFromMobileWorker(node, messages, onToken);
             return;
         }
     }
@@ -524,7 +670,7 @@ export class MeshClientService {
 
     private streamFromMobileWorker(
         node: MeshNodeEndpoint,
-        prompt: string,
+        messages: Array<{ role: string; content: string }>,
         onToken: (tok: string) => void
     ): Promise<void> {
         return new Promise((resolve, reject) => {
@@ -546,7 +692,6 @@ export class MeshClientService {
                 buffer += newChunk;
 
                 const lines = buffer.split('\n');
-                // Keep the trailing incomplete fragment in the buffer
                 buffer = lines.pop() || '';
 
                 for (const line of lines) {
@@ -572,9 +717,7 @@ export class MeshClientService {
                                 reject(new Error(parsed.error));
                             }
                         }
-                    } catch {
-                        // Ignore partial JSON chunks
-                    }
+                    } catch {}
                 }
             };
 
@@ -608,7 +751,12 @@ export class MeshClientService {
                 }
             };
 
-            xhr.send(JSON.stringify({ prompt }));
+            const fallbackPrompt =
+                messages.length === 1
+                    ? messages[0].content
+                    : messages.map((m) => `${m.role}: ${m.content}`).join('\n');
+
+            xhr.send(JSON.stringify({ messages, prompt: fallbackPrompt }));
         });
     }
 }
