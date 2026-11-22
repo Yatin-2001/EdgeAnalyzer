@@ -6,6 +6,7 @@ import {
 import { LLMService } from './LLMService';
 import { ToolOrchestrator } from './ToolOrchestrator';
 import { MeshClientService } from './MeshClientService';
+import { TelemetryService } from './TelemetryService';
 
 export interface SynthesisProgressCallback {
     onStatusUpdate: (statusText: string) => void;
@@ -131,12 +132,19 @@ export class MindspaceSynthesisService {
         let finalReport = '';
 
         if (isRemoteTarget) {
+            const telemetry = TelemetryService.getInstance();
+            const traceContext = await telemetry.createTurnTraceContext(`synth_${notebookId}`, target.nodeId);
             callbacks.onStatusUpdate(`Synthesizing comprehensive report on ${target.displayName}...`);
             await this.mesh.streamChat(
                 [{ role: 'user', content: finalDraftPrompt }],
                 (tok) => {
                     finalReport += tok;
                     callbacks.onPartialReport?.(tok);
+                },
+                {
+                    traceContext,
+                    priority: 0, // Batch/Synthesis priority per specification
+                    nPredict: 2048,
                 }
             );
             finalReport = finalReport.trim();

@@ -1,2 +1,5 @@
 node_modules/
 paired_devices.json
+db/
+.env
+.env.*

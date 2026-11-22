@@ -23,8 +23,7 @@ import { LLMService, PerformanceMetrics } from '../services/LLMService';
 import { ToolOrchestrator } from '../services/ToolOrchestrator';
 import { ModelRegistryModal } from '../components/ModelRegistryModal';
 import { ModelRecord } from '../database/repository';
-
-
+import { TelemetryService } from '../services/TelemetryService';
 
 export interface StudioMessage {
     id: string;
@@ -94,15 +93,35 @@ export const StudioScreen: React.FC<Props> = ({ onBackToChat, onSelectModel }) =
             isProcessing: true,
         };
 
+        const telemetry = TelemetryService.getInstance();
+        const traceCtx = await telemetry.createTurnTraceContext('studio_session', 'local_snapdragon');
+        const ocrSpan = telemetry.startSpan({
+            traceId: traceCtx.trace_id,
+            sessionId: 'studio_session',
+            name: 'client.vision_ocr',
+            observationType: 'span',
+            targetDevice: 'local_snapdragon',
+            attributes: { 'vision.module': 'Google_ML_Kit', 'vision.asset_name': name },
+        });
+
         setAssets((prev) => [...prev.filter((a) => a.type !== 'STANDALONE_IMAGE'), placeholderAsset]);
 
         try {
             const processed = await inspector.inspectAndPreprocessAsset(name, uri, 'image/jpeg');
+            await telemetry.endSpan(ocrSpan, {
+                status: 'OK',
+                extraAttributes: {
+                    'vision.text_length_chars': processed.extractedText?.length || 0,
+                    'vision.image_longest_edge': 448,
+                },
+            });
             setAssets((prev) => prev.map((a) => (a.id === tempId ? processed : a)));
-        } catch {
+        } catch (err: any) {
+            await telemetry.endSpan(ocrSpan, { status: 'ERROR', errorMessage: err?.message });
             setAssets((prev) => prev.filter((a) => a.id !== tempId));
             Alert.alert('Processing Error', 'Failed to preprocess image.');
         }
+
     };
 
     const handleTakePhoto = async () => {
@@ -226,6 +245,8 @@ export const StudioScreen: React.FC<Props> = ({ onBackToChat, onSelectModel }) =
                 {
                     onToken: (tok) => setStreamingContent((prev) => prev + tok),
                     onMetrics: (m) => setMetrics(m),
+                    onQueueStatusChange: (qStatus) =>
+                        setStreamingContent((prev) => prev + `${qStatus}\n`),
                     onToolCallDetected: (toolName, _, step) => {
                         setStreamingContent(
                             (prev) => prev + `⚙️ [Step ${step}] Executing tool: ${toolName}...\n`
@@ -240,6 +261,8 @@ export const StudioScreen: React.FC<Props> = ({ onBackToChat, onSelectModel }) =
                 },
                 {
                     imagePaths: isFirstVisualTurn ? [activeImage!.downscaledUri!] : undefined,
+                    sessionId: 'studio_session',
+                    priority: 1,
                 }
             );
 

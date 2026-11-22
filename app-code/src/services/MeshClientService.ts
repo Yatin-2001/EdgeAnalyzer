@@ -5,8 +5,14 @@ import {
     deleteMeshPeer,
     MeshPeerRecord,
     DeviceTier,
+    TelemetrySpanRecord,
 } from '../database/repository';
 import { MeshIdentityService } from './MeshIdentityService';
+import {
+    TelemetryService,
+    TraceContext,
+    RemoteDesktopTaskSpans,
+} from './TelemetryService';
 import ModelFile from '../../modules/model-file/src/ModelFileModule';
 
 export interface MeshNodeEndpoint {
@@ -18,6 +24,7 @@ export interface MeshNodeEndpoint {
     sharedToken: string;
     isOnline: boolean;
     latencyMs: number;
+    queueDepth?: number;
     models: Array<{ name: string; parameterSize: string; sizeBytes: number }>;
 }
 
@@ -28,6 +35,25 @@ export interface UnifiedComputeTarget {
     deviceTier: DeviceTier;
 }
 
+export interface MeshStreamOptions {
+    traceContext?: TraceContext;
+    taskId?: string;
+    priority?: number; // 0: Synthesis/Batch, 1: Standard, 2: Tool Resume
+    nPredict?: number;
+    onQueueUpdate?: (info: { taskId: string; queuePosition: number; estimatedWaitMs: number }) => void;
+    onTaskStarted?: (info: { taskId: string; queueWaitMs: number }) => void;
+}
+
+export interface MeshStreamResult {
+    taskId?: string;
+    taskStatus?: string;
+    emittedToolCall?: boolean;
+    spans?: RemoteDesktopTaskSpans;
+    ttftMs?: number;
+    durationMs?: number;
+    tokenCount?: number;
+}
+
 export class MeshClientService {
     private static instance: MeshClientService;
     private activeNodes: Map<string, MeshNodeEndpoint> = new Map();
@@ -36,6 +62,7 @@ export class MeshClientService {
     private activeWsNodeId: string | null = null;
     private isHealingSubnet = false;
     private lastSubnetSweepAt = 0;
+    private telemetry = TelemetryService.getInstance();
 
     private selectedTarget: UnifiedComputeTarget = {
         nodeId: 'local_engine',
@@ -46,7 +73,10 @@ export class MeshClientService {
 
     private listeners = new Set<() => void>();
 
-    private constructor() {}
+    private constructor() {
+        // Register outbox batch sync transport with TelemetryService
+        this.telemetry.registerSyncTransport((spans) => this.syncTelemetryBatchToDesktop(spans));
+    }
 
     public static getInstance(): MeshClientService {
         if (!MeshClientService.instance) {
@@ -91,6 +121,29 @@ export class MeshClientService {
             });
         }
         this.notify();
+    }
+
+    /**
+     * Flushes mobile SQLite outbox spans to any online Desktop Supernode
+     */
+    private async syncTelemetryBatchToDesktop(spans: TelemetrySpanRecord[]): Promise<string[]> {
+        const desktopNode = Array.from(this.activeNodes.values()).find(
+            (n) => n.deviceTier === 'thick_desktop' && n.isOnline
+        );
+        if (!desktopNode) return [];
+
+        const res = await fetch(`http://${desktopNode.ip}:${desktopNode.port}/api/mesh/telemetry/sync`, {
+            method: 'POST',
+            headers: {
+                'Content-Type': 'application/json',
+                Authorization: `Bearer ${desktopNode.sharedToken}`,
+            },
+            body: JSON.stringify({ spans }),
+        });
+
+        if (!res.ok) return [];
+        const data = await res.json();
+        return Array.isArray(data.synced_span_ids) ? data.synced_span_ids : [];
     }
 
     public async pairWithNode(ip: string, port: number, pin: string): Promise<void> {
@@ -167,14 +220,12 @@ export class MeshClientService {
     public async scanAndSyncPeers(): Promise<void> {
         try {
             const identity = await MeshIdentityService.getInstance().getOrCreateIdentity();
-            // Ensure local worker service always knows its own persistent node_id
             try {
                 await ModelFile.setWorkerNodeIdentity?.(identity.node_id, identity.node_name);
             } catch {}
 
             const peers = await getAllTrustedPeers();
 
-            // 1. Pull full cluster roster from any reachable desktop node
             const desktopPeer = peers.find((p) => p.device_tier === 'thick_desktop');
             if (desktopPeer) {
                 try {
@@ -202,18 +253,15 @@ export class MeshClientService {
                             }
                         }
                     }
-                } catch {
-                    // Desktop unreachable at last_known_ip; subnet healer will handle it below
-                }
+                } catch {}
             }
 
-            // 2. Refresh local trusted peer list from SQLite
             const updatedPeers = await getAllTrustedPeers();
             if (!updatedPeers || updatedPeers.length === 0) return;
 
             const unreachablePeers: MeshPeerRecord[] = [];
+            let anyDesktopCollectorOnline = false;
 
-            // 3. Probe all known peers across the network
             await Promise.all(
                 updatedPeers.map(async (peer) => {
                     const start = Date.now();
@@ -250,8 +298,13 @@ export class MeshClientService {
                                 sharedToken: peer.shared_token,
                                 isOnline: true,
                                 latencyMs,
+                                queueDepth: data.queue?.depth || 0,
                                 models,
                             });
+
+                            if (peer.device_tier === 'thick_desktop' && data.telemetry?.status === 'ready') {
+                                anyDesktopCollectorOnline = true;
+                            }
                         } else {
                             this.markOffline(peer, targetPort);
                             unreachablePeers.push(peer);
@@ -263,10 +316,14 @@ export class MeshClientService {
                 })
             );
 
+            this.telemetry.setDesktopCollectorStatus(anyDesktopCollectorOnline);
+            if (anyDesktopCollectorOnline) {
+                this.telemetry.flushOutbox().catch(() => {});
+            }
+
             this.ensurePersistentConnection();
             this.notify();
 
-            // 4. Zero-Touch Wi-Fi Roaming: If any trusted peers timed out, run background /24 subnet sweep
             if (
                 unreachablePeers.length > 0 &&
                 !this.isHealingSubnet &&
@@ -279,10 +336,6 @@ export class MeshClientService {
         }
     }
 
-    /**
-     * Auto-IP Healer: Sweeps the current /24 Wi-Fi subnet when trusted peers change IPs
-     * (e.g. moving from PG Wi-Fi to Home Wi-Fi or Hotspot) and updates SQLite automatically.
-     */
     private async healUnreachablePeers(
         offlinePeers: MeshPeerRecord[],
         selfNodeId: string
@@ -315,13 +368,8 @@ export class MeshClientService {
                 )
             );
 
-            console.log(
-                `[Mesh Auto-Heal] 🔍 Sweeping subnet ${subnetPrefix}.1-254 across port(s) [${portsToProbe.join(', ')}] for ${offlinePeers.length} offline peer(s)...`
-            );
-
             let healedAny = false;
             const candidateHosts: number[] = [];
-            // Prioritize gateway/low DHCP (.1 - .20) and common hotspot ranges first
             for (let i = 1; i <= 254; i++) {
                 if (i !== selfHost) candidateHosts.push(i);
             }
@@ -346,18 +394,16 @@ export class MeshClientService {
                                 const data = await res.json();
                                 if (data.nodeId && data.nodeId === selfNodeId) continue;
 
-                                // Match by persistent nodeId first, or by nodeName + tier fallback
                                 const matchedPeer = offlinePeers.find(
                                     (p) =>
                                         (data.nodeId && p.node_id === data.nodeId) ||
                                         (data.nodeName && p.node_name === data.nodeName) ||
-                                        (port === 8080 && p.device_tier === 'thick_desktop' && offlinePeers.filter((x) => x.device_tier === 'thick_desktop').length === 1)
+                                        (port === 8080 &&
+                                            p.device_tier === 'thick_desktop' &&
+                                            offlinePeers.filter((x) => x.device_tier === 'thick_desktop').length === 1)
                                 );
 
                                 if (matchedPeer && matchedPeer.last_known_ip !== candidateIp) {
-                                    console.log(
-                                        `[Mesh Auto-Heal] ✅ Healed peer "${matchedPeer.node_name}" (${matchedPeer.node_id}): ${matchedPeer.last_known_ip} -> ${candidateIp}:${port}`
-                                    );
                                     await upsertMeshPeer(
                                         matchedPeer.node_id,
                                         data.nodeName || matchedPeer.node_name,
@@ -368,9 +414,7 @@ export class MeshClientService {
                                     );
                                     healedAny = true;
                                 }
-                            } catch {
-                                // Host/port closed or timed out
-                            }
+                            } catch {}
                         }
                     })
                 );
@@ -437,6 +481,14 @@ export class MeshClientService {
             ws.onmessage = async (event) => {
                 try {
                     const msg = JSON.parse(event.data.toString());
+
+                    // Trigger background outbox flush when Desktop heartbeat confirms Langfuse collector is ready
+                    if (msg.type === 'pong' && msg.telemetry?.status === 'ready') {
+                        this.telemetry.setDesktopCollectorStatus(true);
+                        this.telemetry.flushOutbox().catch(() => {});
+                        return;
+                    }
+
                     const identity = await MeshIdentityService.getInstance().getOrCreateIdentity();
 
                     if (msg.method === 'mcp.peer_joined' && msg.params) {
@@ -511,8 +563,9 @@ export class MeshClientService {
 
     public async streamChat(
         messages: Array<{ role: string; content: string }>,
-        onToken: (tok: string) => void
-    ): Promise<void> {
+        onToken: (tok: string) => void,
+        options: MeshStreamOptions = {}
+    ): Promise<MeshStreamResult> {
         const target = this.selectedTarget;
         if (target.nodeId === 'local_engine') {
             throw new Error('Local engine must be evaluated through LLMService.');
@@ -524,22 +577,23 @@ export class MeshClientService {
         }
 
         if (node.deviceTier === 'thick_desktop') {
-            await this.streamFromDesktop(node, target.modelName, messages, onToken);
-            return;
+            return await this.streamFromDesktop(node, target.modelName, messages, onToken, options);
         }
 
         if (node.deviceTier === 'thick_mobile') {
-            await this.streamFromMobileWorker(node, messages, onToken);
-            return;
+            return await this.streamFromMobileWorker(node, messages, onToken, options);
         }
+
+        return {};
     }
 
     private streamFromDesktop(
         node: MeshNodeEndpoint,
         model: string,
         messages: Array<{ role: string; content: string }>,
-        onToken: (tok: string) => void
-    ): Promise<void> {
+        onToken: (tok: string) => void,
+        options: MeshStreamOptions = {}
+    ): Promise<MeshStreamResult> {
         return new Promise((resolve, reject) => {
             const isPersistent =
                 this.persistentWs !== null && this.persistentWs.readyState === WebSocket.OPEN;
@@ -548,8 +602,9 @@ export class MeshClientService {
                 ? this.persistentWs!
                 : new WebSocket(`ws://${node.ip}:${node.port}/mcp?token=${encodeURIComponent(node.sharedToken)}`);
 
-            const id = Date.now();
-            let hasReceivedChunk = false;
+            const reqId = `req_${Date.now()}_${Math.floor(Math.random() * 1000)}`;
+            let assignedTaskId = options.taskId || '';
+            let hasReceivedAckOrChunk = false;
 
             const cleanup = () => {
                 if (!isPersistent) {
@@ -560,43 +615,136 @@ export class MeshClientService {
             };
 
             const timeout = setTimeout(() => {
-                if (!hasReceivedChunk) {
+                if (!hasReceivedAckOrChunk) {
+                    socket.removeEventListener('message', handleMessage);
                     cleanup();
-                    this.streamFromDesktopHttp(node, model, messages, onToken)
+                    this.streamFromDesktopHttp(node, model, messages, onToken, options)
                         .then(resolve)
                         .catch(reject);
                 }
-            }, 5000);
+            }, 6000);
 
             const handleMessage = (event: WebSocketMessageEvent) => {
                 try {
                     const res = JSON.parse(event.data.toString());
-                    if (res.method === 'mcp.stream_chunk' && res.params?.id === id) {
-                        hasReceivedChunk = true;
+
+                    // Step 1 ACK: mcp.task_queued
+                    if (
+                        res.method === 'mcp.task_queued' &&
+                        (res.params?.request_id === reqId ||
+                            (assignedTaskId && res.params?.task_id === assignedTaskId))
+                    ) {
+                        hasReceivedAckOrChunk = true;
                         clearTimeout(timeout);
-                        onToken(res.params.chunk);
-                    } else if (res.id === id && res.result?.status === 'completed') {
+                        assignedTaskId = res.params.task_id;
+                        options.onQueueUpdate?.({
+                            taskId: assignedTaskId,
+                            queuePosition: res.params.queue_position || 1,
+                            estimatedWaitMs: res.params.estimated_wait_ms || 50,
+                        });
+                        return;
+                    }
+
+                    // Step 2: mcp.task_started
+                    if (
+                        res.method === 'mcp.task_started' &&
+                        assignedTaskId &&
+                        res.params?.task_id === assignedTaskId
+                    ) {
+                        hasReceivedAckOrChunk = true;
+                        clearTimeout(timeout);
+                        options.onTaskStarted?.({
+                            taskId: assignedTaskId,
+                            queueWaitMs: res.params.queue_wait_ms || 0,
+                        });
+                        return;
+                    }
+
+                    // Step 2b: Token Stream (supports both mcp.token_chunk and legacy mcp.stream_chunk)
+                    if (
+                        (res.method === 'mcp.token_chunk' || res.method === 'mcp.stream_chunk') &&
+                        ((assignedTaskId && res.params?.task_id === assignedTaskId) ||
+                            res.params?.id === reqId)
+                    ) {
+                        hasReceivedAckOrChunk = true;
+                        clearTimeout(timeout);
+                        const tok = res.params.token ?? res.params.chunk;
+                        if (tok) onToken(tok);
+                        return;
+                    }
+
+                    // Step 3: mcp.task_completed
+                    if (
+                        (res.method === 'mcp.task_completed' &&
+                            ((assignedTaskId && res.params?.task_id === assignedTaskId) ||
+                                res.id === reqId)) ||
+                        (res.id === reqId && res.result?.status === 'completed')
+                    ) {
                         clearTimeout(timeout);
                         socket.removeEventListener('message', handleMessage);
                         cleanup();
-                        resolve();
-                    } else if (res.id === id && res.error) {
+
+                        const payload = res.params || res.result || {};
+                        const spans: RemoteDesktopTaskSpans | undefined = payload.spans;
+
+                        if (spans && options.traceContext) {
+                            this.telemetry
+                                .ingestRemoteDesktopSpans(
+                                    options.traceContext.trace_id,
+                                    options.traceContext.session_id,
+                                    spans
+                                )
+                                .catch(() => {});
+                        }
+
+                        resolve({
+                            taskId: payload.task_id || assignedTaskId,
+                            taskStatus: payload.status || payload.task_status || 'COMPLETED',
+                            emittedToolCall: payload.emitted_tool_call,
+                            spans,
+                            ttftMs: spans?.ttft_ms,
+                            durationMs: spans?.generation_duration_ms,
+                            tokenCount: spans?.completion_tokens,
+                        });
+                        return;
+                    }
+
+                    // Error / Failed frame
+                    if (
+                        (res.method === 'mcp.task_failed' &&
+                            assignedTaskId &&
+                            res.params?.task_id === assignedTaskId) ||
+                        (res.id === reqId && res.error)
+                    ) {
                         clearTimeout(timeout);
                         socket.removeEventListener('message', handleMessage);
                         cleanup();
-                        reject(new Error(res.error.message || 'Ollama Error'));
+                        reject(new Error(res.params?.error || res.error?.message || 'Ollama Task Error'));
                     }
                 } catch {}
             };
 
             const sendPayload = () => {
                 socket.addEventListener('message', handleMessage);
+                const rpcMethod =
+                    options.priority === 2 && options.taskId ? 'mcp.resume_task' : 'mcp.submit_task';
+
                 socket.send(
                     JSON.stringify({
                         jsonrpc: '2.0',
-                        id,
-                        method: 'mcp.stream_chat',
-                        params: { model, messages },
+                        id: reqId,
+                        method: rpcMethod,
+                        params: {
+                            task_id: options.taskId,
+                            session_id: options.traceContext?.session_id,
+                            trace_id: options.traceContext?.trace_id,
+                            parent_span_id: options.traceContext?.parent_span_id,
+                            priority: options.priority ?? 1,
+                            n_predict: options.nPredict,
+                            model,
+                            messages,
+                            trace_context: options.traceContext,
+                        },
                     })
                 );
             };
@@ -608,12 +756,12 @@ export class MeshClientService {
                 socket.onerror = () => {
                     clearTimeout(timeout);
                     cleanup();
-                    this.streamFromDesktopHttp(node, model, messages, onToken)
+                    this.streamFromDesktopHttp(node, model, messages, onToken, options)
                         .then(resolve)
                         .catch(reject);
                 };
                 socket.onclose = (e) => {
-                    if (!hasReceivedChunk) {
+                    if (!hasReceivedAckOrChunk) {
                         clearTimeout(timeout);
                         cleanup();
                         reject(
@@ -631,15 +779,23 @@ export class MeshClientService {
         node: MeshNodeEndpoint,
         model: string,
         messages: Array<{ role: string; content: string }>,
-        onToken: (tok: string) => void
-    ): Promise<void> {
+        onToken: (tok: string) => void,
+        options: MeshStreamOptions = {}
+    ): Promise<MeshStreamResult> {
         const res = await fetch(`http://${node.ip}:${node.port}/api/mesh/chat`, {
             method: 'POST',
             headers: {
                 'Content-Type': 'application/json',
                 Authorization: `Bearer ${node.sharedToken}`,
             },
-            body: JSON.stringify({ model, messages }),
+            body: JSON.stringify({
+                model,
+                messages,
+                task_id: options.taskId,
+                priority: options.priority ?? 1,
+                n_predict: options.nPredict,
+                trace_context: options.traceContext,
+            }),
         });
 
         if (!res.ok) {
@@ -647,6 +803,7 @@ export class MeshClientService {
             throw new Error(err.error || `Desktop HTTP stream returned ${res.status}`);
         }
 
+        let resultMeta: MeshStreamResult = {};
         const reader = (res as any).body?.getReader ? (res as any).body.getReader() : null;
         if (reader) {
             const decoder = new TextDecoder();
@@ -660,19 +817,40 @@ export class MeshClientService {
                         try {
                             const data = JSON.parse(line.substring(6));
                             if (data.token) onToken(data.token);
+                            if (data.type === 'trace_metrics' && data.spans) {
+                                resultMeta = {
+                                    taskId: data.task_id,
+                                    taskStatus: data.status,
+                                    spans: data.spans,
+                                    ttftMs: data.spans.ttft_ms,
+                                    durationMs: data.spans.generation_duration_ms,
+                                    tokenCount: data.spans.completion_tokens,
+                                };
+                                if (options.traceContext) {
+                                    this.telemetry
+                                        .ingestRemoteDesktopSpans(
+                                            options.traceContext.trace_id,
+                                            options.traceContext.session_id,
+                                            data.spans
+                                        )
+                                        .catch(() => {});
+                                }
+                            }
                             if (data.error) throw new Error(data.error);
                         } catch {}
                     }
                 }
             }
         }
+        return resultMeta;
     }
 
     private streamFromMobileWorker(
         node: MeshNodeEndpoint,
         messages: Array<{ role: string; content: string }>,
-        onToken: (tok: string) => void
-    ): Promise<void> {
+        onToken: (tok: string) => void,
+        options: MeshStreamOptions = {}
+    ): Promise<MeshStreamResult> {
         return new Promise((resolve, reject) => {
             const xhr = new XMLHttpRequest();
             const url = `http://${node.ip}:${node.port}/api/mesh/inference`;
@@ -680,9 +858,23 @@ export class MeshClientService {
             xhr.open('POST', url);
             xhr.setRequestHeader('Content-Type', 'application/json');
 
+            const startTimeMs = Date.now();
+            let firstTokenMs = 0;
+            let tokenCount = 0;
             let processedLength = 0;
             let buffer = '';
             let isResolved = false;
+
+            const finishSuccess = () => {
+                if (isResolved) return;
+                isResolved = true;
+                const durationMs = Math.max(1, Date.now() - startTimeMs);
+                resolve({
+                    ttftMs: firstTokenMs || Math.min(durationMs, 120),
+                    durationMs,
+                    tokenCount,
+                });
+            };
 
             const processBuffer = () => {
                 if (xhr.responseText.length <= processedLength) return;
@@ -700,16 +892,17 @@ export class MeshClientService {
 
                     const dataStr = trimmed.slice(6).trim();
                     if (dataStr === '[DONE]') {
-                        if (!isResolved) {
-                            isResolved = true;
-                            resolve();
-                        }
+                        finishSuccess();
                         return;
                     }
 
                     try {
                         const parsed = JSON.parse(dataStr);
                         if (parsed.token) {
+                            if (firstTokenMs === 0) {
+                                firstTokenMs = Date.now() - startTimeMs;
+                            }
+                            tokenCount++;
                             onToken(parsed.token);
                         } else if (parsed.error) {
                             if (!isResolved) {
@@ -728,10 +921,10 @@ export class MeshClientService {
             xhr.onload = () => {
                 processBuffer();
                 if (!isResolved) {
-                    isResolved = true;
                     if (xhr.status >= 200 && xhr.status < 300) {
-                        resolve();
+                        finishSuccess();
                     } else {
+                        isResolved = true;
                         reject(new Error(`Worker responded with HTTP ${xhr.status}`));
                     }
                 }
@@ -756,7 +949,13 @@ export class MeshClientService {
                     ? messages[0].content
                     : messages.map((m) => `${m.role}: ${m.content}`).join('\n');
 
-            xhr.send(JSON.stringify({ messages, prompt: fallbackPrompt }));
+            xhr.send(
+                JSON.stringify({
+                    messages,
+                    prompt: fallbackPrompt,
+                    trace_context: options.traceContext,
+                })
+            );
         });
     }
 }

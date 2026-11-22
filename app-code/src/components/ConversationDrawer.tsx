@@ -22,9 +22,9 @@ interface Props {
     visible: boolean;
     conversations: ConversationRecord[];
     activeId: string | null;
-    activeTab: 'chat' | 'studio' | 'mindspace' | 'advisor';
+    activeTab: 'chat' | 'studio' | 'mindspace' | 'advisor' | 'telemetry';
     searchProvider: SearchProvider;
-    onSelectTab: (tab: 'chat' | 'studio' | 'mindspace' | 'advisor') => void;
+    onSelectTab: (tab: 'chat' | 'studio' | 'mindspace' | 'advisor' | 'telemetry') => void;
     onSelect: (conv: ConversationRecord) => void;
     onNew: () => void;
     onDelete: (id: string) => void;
@@ -195,6 +195,19 @@ export const ConversationDrawer: React.FC<Props> = ({
                             <Text style={styles.workspaceIcon}>🤝</Text>
                             <Text style={[styles.workspaceText, activeTab === 'advisor' && styles.workspaceTextActive]}>
                                 Message Advisor
+                            </Text>
+                        </TouchableOpacity>
+
+                        <TouchableOpacity
+                            style={[styles.workspaceItem, activeTab === 'telemetry' && styles.workspaceItemActive]}
+                            onPress={() => {
+                                onSelectTab('telemetry');
+                                onClose();
+                            }}
+                        >
+                            <Text style={styles.workspaceIcon}>📊</Text>
+                            <Text style={[styles.workspaceText, activeTab === 'telemetry' && styles.workspaceTextActive]}>
+                                Telemetry Inspector
                             </Text>
                         </TouchableOpacity>
 

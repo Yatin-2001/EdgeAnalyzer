@@ -199,6 +199,34 @@ async function initDatabase(): Promise<SQLite.SQLiteDatabase> {
       created_at INTEGER NOT NULL,
       updated_at INTEGER NOT NULL
     );
+
+    CREATE TABLE IF NOT EXISTS local_telemetry_spans (
+        span_id TEXT PRIMARY KEY,
+        trace_id TEXT NOT NULL,
+        session_id TEXT NOT NULL,
+        parent_span_id TEXT,
+        name TEXT NOT NULL,
+        observation_type TEXT NOT NULL,
+        target_device TEXT NOT NULL,
+        duration_ms INTEGER NOT NULL,
+        ttft_ms INTEGER,
+        prompt_tokens INTEGER,
+        completion_tokens INTEGER,
+        tok_per_sec REAL,
+        status TEXT NOT NULL,
+        error_message TEXT,
+        attributes_json TEXT NOT NULL,
+        synced_to_server INTEGER DEFAULT 0,
+        created_at INTEGER NOT NULL
+    );
+
+    CREATE INDEX IF NOT EXISTS idx_telemetry_sync
+      ON local_telemetry_spans(synced_to_server, created_at);
+
+    CREATE INDEX IF NOT EXISTS idx_telemetry_trace_session
+      ON local_telemetry_spans(trace_id, session_id);
+
+
   `);
 
   return db;

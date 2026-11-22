@@ -15,6 +15,7 @@ import { LLMService, PerformanceMetrics } from './LLMService';
 import { EmbeddingService } from './EmbeddingService';
 import { ToolOrchestrator } from './ToolOrchestrator';
 import { MeshClientService } from './MeshClientService';
+import { TelemetryService } from './TelemetryService';
 
 export interface ScoredChunk {
   chunkId: string;
@@ -39,6 +40,7 @@ export class MindspaceRAGService {
   private embeddingService = EmbeddingService.getInstance();
   private orchestrator = ToolOrchestrator.getInstance();
   private mesh = MeshClientService.getInstance();
+  private telemetry = TelemetryService.getInstance();
 
   private constructor() {}
 
@@ -56,15 +58,18 @@ export class MindspaceRAGService {
       notebookId: string,
       userQuery: string,
       allAssets: NotebookAssetRecord[]
-  ): Promise<ScoredChunk[]> {
+  ): Promise<{ chunks: ScoredChunk[]; denseCount: number; sparseCount: number }> {
     const assetMap = new Map<string, NotebookAssetRecord>();
     allAssets.forEach((a) => assetMap.set(a.id, a));
 
     const allChunks = await getAssetChunksByNotebook(notebookId);
-    if (allChunks.length === 0) return [];
+    if (allChunks.length === 0) {
+      return { chunks: [], denseCount: 0, sparseCount: 0 };
+    }
 
     const RRF_K = 60;
     const rrfScores = new Map<string, { chunk: typeof allChunks[0]; score: number }>();
+    let denseCount = 0;
 
     // 1. Dense Semantic Vector Retrieval Rank
     if (this.embeddingService.isReady()) {
@@ -78,6 +83,8 @@ export class MindspaceRAGService {
             })
             .sort((a, b) => b.sim - a.sim);
 
+        denseCount = vectorScored.filter((v) => v.sim > 0).length;
+
         vectorScored.forEach((item, rank) => {
           const current = rrfScores.get(item.chunk.id) || { chunk: item.chunk, score: 0 };
           current.score += 1 / (RRF_K + (rank + 1));
@@ -90,6 +97,8 @@ export class MindspaceRAGService {
 
     // 2. Sparse Keyword BM25 / FTS5 Retrieval Rank
     const ftsHits = await searchAssetChunksFTS(notebookId, userQuery, 25);
+    const sparseCount = ftsHits.length;
+
     ftsHits.forEach((hit, rank) => {
       const matchChunk = allChunks.find((c) => c.id === hit.chunk_id);
       if (matchChunk) {
@@ -141,11 +150,15 @@ export class MindspaceRAGService {
       }
     }
 
-    return balancedResults.sort((a, b) => b.score - a.score);
+    return {
+      chunks: balancedResults.sort((a, b) => b.score - a.score),
+      denseCount,
+      sparseCount,
+    };
   }
 
   /**
-   * Executes Dual-Scope RAG Query
+   * Executes Dual-Scope RAG Query with Full Telemetry Instrumentation
    */
   public async executeQuery(
       notebookId: string,
@@ -169,18 +182,44 @@ export class MindspaceRAGService {
         Math.ceil(userQuery.length / 4)
     );
 
+    // Initialize distributed trace context for this turn
+    const traceContext = await this.telemetry.createTurnTraceContext(
+        conversationId,
+        target.nodeId
+    );
+
+    const ragSpan = this.telemetry.startSpan({
+      traceId: traceContext.trace_id,
+      sessionId: conversationId,
+      name: 'client.mindspace_retriever',
+      observationType: 'retriever',
+      targetDevice: 'local_snapdragon',
+      attributes: {
+        'rag.query': userQuery.substring(0, 100),
+        'rag.scope': targetAssetId ? 'single_asset' : 'global',
+      },
+    });
+
     const history = await getNotebookMessages(conversationId);
     const recentTurns = history.slice(-6);
 
     let promptPayload = '';
     const sources: Array<{ asset_id: string; title: string; chunk_preview: string }> = [];
+    let denseMatchesCount = 0;
+    let sparseMatchesCount = 0;
 
     // ==========================================
     // Scope A: Single-Asset Inspection Mode
     // ==========================================
     if (targetAssetId) {
       const asset = await getAssetById(targetAssetId);
-      if (!asset) throw new Error('Target asset not found.');
+      if (!asset) {
+        await this.telemetry.endSpan(ragSpan, {
+          status: 'ERROR',
+          errorMessage: 'Target asset not found',
+        });
+        throw new Error('Target asset not found.');
+      }
 
       sources.push({
         asset_id: asset.id,
@@ -204,9 +243,7 @@ export class MindspaceRAGService {
           `You are MindSpace, an intelligent on-device research assistant analyzing a single asset.\n` +
           `Answer the user's questions accurately using the provided asset context.`;
 
-      const formattedSystem = isRemoteTarget
-          ? baseSystem
-          : this.orchestrator.formatSystemPromptWithTools(baseSystem, userQuery);
+      const formattedSystem = this.orchestrator.formatSystemPromptWithTools(baseSystem, userQuery);
 
       let historyString = '';
       for (const msg of recentTurns) {
@@ -226,14 +263,20 @@ export class MindspaceRAGService {
       const notebook = await getNotebookById(notebookId);
       const allAssets = await getAssetsByNotebook(notebookId);
 
-      const topChunks = await this.retrieveHybridBalancedChunks(notebookId, userQuery, allAssets);
+      const {
+        chunks: topChunks,
+        denseCount,
+        sparseCount,
+      } = await this.retrieveHybridBalancedChunks(notebookId, userQuery, allAssets);
+
+      denseMatchesCount = denseCount;
+      sparseMatchesCount = sparseCount;
 
       let groundingContext = '### NOTEBOOK GROUNDING SOURCES:\n';
 
       if (topChunks.length > 0) {
         const uniqueAssetIds = new Set<string>();
         topChunks.forEach((c) => {
-          const typeLabel = c.assetType === 'screenshot' || c.assetType === 'image' ? 'Visual Card' : 'Doc Text';
           groundingContext += `\n${c.chunkText}\n\n`;
 
           if (!uniqueAssetIds.has(c.assetId)) {
@@ -266,9 +309,7 @@ export class MindspaceRAGService {
           `You are MindSpace, an on-device multimodal research assistant synthesizing information across all assets in notebook: "${notebook?.title || 'Research'}".\n` +
           `Compare specs, aggregate facts, and answer user queries accurately using the grounding sources above.`;
 
-      const formattedSystem = isRemoteTarget
-          ? baseSystem
-          : this.orchestrator.formatSystemPromptWithTools(baseSystem, userQuery);
+      const formattedSystem = this.orchestrator.formatSystemPromptWithTools(baseSystem, userQuery);
 
       let historyString = '';
       for (const msg of recentTurns) {
@@ -281,39 +322,33 @@ export class MindspaceRAGService {
           `<|im_start|>assistant\n`;
     }
 
-    let fullText = '';
-    let totalTokens = 0;
+    // Complete the retriever span with dense/sparse match metrics
+    await this.telemetry.endSpan(ragSpan, {
+      status: 'OK',
+      extraAttributes: {
+        'rag.dense_matches': denseMatchesCount,
+        'rag.sparse_matches': sparseMatchesCount,
+        'rag.top_k_chunks': sources.length,
+      },
+    });
 
-    if (isRemoteTarget) {
-      const startTime = Date.now();
-      await this.mesh.streamChat(
-          [{ role: 'user', content: promptPayload }],
-          (token) => {
-            fullText += token;
-            totalTokens++;
-            callbacks.onToken(token);
-          }
-      );
-      const durationSec = (Date.now() - startTime) / 1000;
-      const metrics: PerformanceMetrics = {
-        tokensPerSecond: durationSec > 0 ? parseFloat((totalTokens / durationSec).toFixed(1)) : 0,
-        totalTokens,
-        ttftMs: 45,
-        generationTimeSec: durationSec,
-      };
-      callbacks.onMetrics?.(metrics);
-    } else {
-      const result = await this.orchestrator.executeAgentLoop(
-          promptPayload,
-          userQuery,
-          {
-            onToken: callbacks.onToken,
-            onMetrics: callbacks.onMetrics,
-          }
-      );
-      fullText = result.fullText;
-      totalTokens = result.metrics.totalTokens;
-    }
+    // Execute generation (and any tool calls) through the unified ToolOrchestrator
+    const result = await this.orchestrator.executeAgentLoop(
+        promptPayload,
+        userQuery,
+        {
+          onToken: callbacks.onToken,
+          onMetrics: callbacks.onMetrics,
+        },
+        {
+          sessionId: conversationId,
+          traceContext,
+          priority: 1,
+        }
+    );
+
+    const fullText = result.fullText;
+    const totalTokens = result.metrics.totalTokens;
 
     const assistantMsg = await insertNotebookMessage(
         conversationId,

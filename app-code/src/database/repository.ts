@@ -1180,3 +1180,233 @@ export async function deleteMeshPeer(nodeId: string): Promise<void> {
     console.warn('[Repository] deleteMeshPeer failed:', err);
   }
 }
+
+
+
+// ----------------------------------------------------
+// Distributed Telemetry & Outbox Spans (Phase 4)
+// ----------------------------------------------------
+export type ObservationType = 'generation' | 'tool' | 'retriever' | 'span';
+
+export interface TelemetrySpanRecord {
+  span_id: string;
+  trace_id: string;
+  session_id: string;
+  parent_span_id: string | null;
+  name: string;
+  observation_type: ObservationType;
+  target_device: string;
+  duration_ms: number;
+  ttft_ms: number | null;
+  prompt_tokens: number | null;
+  completion_tokens: number | null;
+  tok_per_sec: number | null;
+  status: 'OK' | 'ERROR';
+  error_message: string | null;
+  attributes_json: string;
+  synced_to_server: number; // 0 or 1
+  created_at: number;
+}
+
+export async function insertTelemetrySpan(span: Omit<TelemetrySpanRecord, 'synced_to_server'> & { synced_to_server?: number }): Promise<void> {
+  try {
+    const db = await getDatabase();
+    await db.runAsync(
+        `INSERT OR REPLACE INTO local_telemetry_spans (
+        span_id, trace_id, session_id, parent_span_id, name, observation_type,
+        target_device, duration_ms, ttft_ms, prompt_tokens, completion_tokens,
+        tok_per_sec, status, error_message, attributes_json, synced_to_server, created_at
+      ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?);`,
+        [
+          span.span_id,
+          span.trace_id,
+          span.session_id,
+          span.parent_span_id ?? null,
+          span.name,
+          span.observation_type,
+          span.target_device,
+          Math.max(0, Math.round(span.duration_ms)),
+          span.ttft_ms ?? null,
+          span.prompt_tokens ?? null,
+          span.completion_tokens ?? null,
+          span.tok_per_sec ?? null,
+          span.status,
+          span.error_message ?? null,
+          span.attributes_json,
+          span.synced_to_server ?? 0,
+          span.created_at,
+        ]
+    );
+  } catch (err) {
+    console.warn('[Repository] insertTelemetrySpan error:', err);
+  }
+}
+
+export async function getUnsyncedTelemetrySpans(limit: number = 50): Promise<TelemetrySpanRecord[]> {
+  try {
+    const db = await getDatabase();
+    return await db.getAllAsync<TelemetrySpanRecord>(
+        'SELECT * FROM local_telemetry_spans WHERE synced_to_server = 0 ORDER BY created_at ASC LIMIT ?;',
+        [limit]
+    );
+  } catch (err) {
+    console.warn('[Repository] getUnsyncedTelemetrySpans error:', err);
+    return [];
+  }
+}
+
+export async function getUnsyncedSpanCount(): Promise<number> {
+  try {
+    const db = await getDatabase();
+    const row = await db.getFirstAsync<{ count: number }>(
+        'SELECT COUNT(*) as count FROM local_telemetry_spans WHERE synced_to_server = 0;'
+    );
+    return row?.count || 0;
+  } catch {
+    return 0;
+  }
+}
+
+export async function markTelemetrySpansSynced(spanIds: string[]): Promise<void> {
+  if (!spanIds || spanIds.length === 0) return;
+  try {
+    const db = await getDatabase();
+    const placeholders = spanIds.map(() => '?').join(',');
+    await db.runAsync(
+        `UPDATE local_telemetry_spans SET synced_to_server = 1 WHERE span_id IN (${placeholders});`,
+        spanIds
+    );
+  } catch (err) {
+    console.warn('[Repository] markTelemetrySpansSynced error:', err);
+  }
+}
+
+export async function getTelemetrySpansBySession(
+    sessionId?: string | null,
+    limit: number = 150
+): Promise<TelemetrySpanRecord[]> {
+  try {
+    const db = await getDatabase();
+    if (sessionId) {
+      return await db.getAllAsync<TelemetrySpanRecord>(
+          'SELECT * FROM local_telemetry_spans WHERE session_id = ? ORDER BY created_at ASC LIMIT ?;',
+          [sessionId, limit]
+      );
+    }
+    return await db.getAllAsync<TelemetrySpanRecord>(
+        'SELECT * FROM local_telemetry_spans ORDER BY created_at DESC LIMIT ?;',
+        [limit]
+    );
+  } catch (err) {
+    console.warn('[Repository] getTelemetrySpansBySession error:', err);
+    return [];
+  }
+}
+
+/**
+ * Retention & Pruning Policy:
+ * 1. Purge synced spans older than 7 days
+ * 2. Cap unsynced spans at 10,000 using FIFO rotation
+ */
+export async function pruneTelemetrySpans(): Promise<void> {
+  try {
+    const db = await getDatabase();
+    const cutoff7d = Date.now() - 7 * 24 * 60 * 60 * 1000;
+    await db.runAsync(
+        'DELETE FROM local_telemetry_spans WHERE synced_to_server = 1 AND created_at < ?;',
+        [cutoff7d]
+    );
+
+    const unsyncedRow = await db.getFirstAsync<{ count: number }>(
+        'SELECT COUNT(*) as count FROM local_telemetry_spans WHERE synced_to_server = 0;'
+    );
+    const unsyncedCount = unsyncedRow?.count || 0;
+    if (unsyncedCount > 10000) {
+      const excess = unsyncedCount - 10000;
+      await db.runAsync(
+          `DELETE FROM local_telemetry_spans WHERE span_id IN (
+          SELECT span_id FROM local_telemetry_spans WHERE synced_to_server = 0 ORDER BY created_at ASC LIMIT ?
+        );`,
+          [excess]
+      );
+    }
+  } catch (err) {
+    console.warn('[Repository] pruneTelemetrySpans error:', err);
+  }
+}
+
+
+export type TelemetrySessionSource = 'chat' | 'mindspace' | 'studio' | 'other';
+
+export interface TelemetrySessionSummary {
+  session_id: string;
+  title: string;
+  source: TelemetrySessionSource;
+  turn_count: number;
+  span_count: number;
+  unsynced_count: number;
+  avg_ttft_ms: number | null;
+  avg_tok_per_sec: number | null;
+  last_activity_at: number;
+}
+
+export async function getTelemetrySessionSummaries(
+    limit: number = 50
+): Promise<TelemetrySessionSummary[]> {
+  try {
+    const db = await getDatabase();
+    return await db.getAllAsync<TelemetrySessionSummary>(
+        `SELECT
+        s.session_id,
+        COALESCE(
+          c.title,
+          nc.title,
+          CASE WHEN nb.title IS NOT NULL THEN 'Synthesis: ' || nb.title END,
+          CASE WHEN s.session_id LIKE 'studio%' THEN 'Visual Studio' END,
+          s.session_id
+        ) AS title,
+        CASE
+          WHEN s.session_id LIKE 'studio%' THEN 'studio'
+          WHEN s.session_id LIKE 'nb_conv_%' OR s.session_id LIKE 'synth_%' OR nc.id IS NOT NULL OR nb.id IS NOT NULL THEN 'mindspace'
+          WHEN c.id IS NOT NULL OR s.session_id LIKE 'conv_%' THEN 'chat'
+          ELSE 'other'
+        END AS source,
+        COUNT(DISTINCT s.trace_id) AS turn_count,
+        COUNT(s.span_id) AS span_count,
+        SUM(CASE WHEN s.synced_to_server = 0 THEN 1 ELSE 0 END) AS unsynced_count,
+        ROUND(AVG(CASE WHEN s.observation_type = 'generation' AND s.ttft_ms > 0 THEN s.ttft_ms END)) AS avg_ttft_ms,
+        ROUND(AVG(CASE WHEN s.observation_type = 'generation' AND s.tok_per_sec > 0 THEN s.tok_per_sec END), 1) AS avg_tok_per_sec,
+        MAX(s.created_at) AS last_activity_at
+      FROM local_telemetry_spans s
+      LEFT JOIN conversations c ON c.id = s.session_id
+      LEFT JOIN notebook_conversations nc ON nc.id = s.session_id
+      LEFT JOIN notebooks nb ON ('synth_' || nb.id) = s.session_id
+      GROUP BY s.session_id
+      ORDER BY last_activity_at DESC
+      LIMIT ?;`,
+        [limit]
+    );
+  } catch (err) {
+    console.warn('[Repository] getTelemetrySessionSummaries error:', err);
+    return [];
+  }
+}
+
+export async function getTelemetrySpansForSession(
+    sessionId: string,
+    limit: number = 500
+): Promise<TelemetrySpanRecord[]> {
+  try {
+    const db = await getDatabase();
+    return await db.getAllAsync<TelemetrySpanRecord>(
+        `SELECT * FROM local_telemetry_spans
+       WHERE session_id = ?
+       ORDER BY created_at ASC
+       LIMIT ?;`,
+        [sessionId, limit]
+    );
+  } catch (err) {
+    console.warn('[Repository] getTelemetrySpansForSession error:', err);
+    return [];
+  }
+}

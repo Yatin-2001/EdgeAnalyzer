@@ -43,6 +43,7 @@ import { SearchSettingsModal } from '@/src/components/SearchSettingsModal';
 import { StudioScreen } from '@/src/screens/StudioScreen';
 import { MindspaceHomeScreen } from '@/src/screens/mindspace/MindspaceHomeScreen';
 import { NotebookDetailScreen } from '@/src/screens/mindspace/NotebookDetailScreen';
+import { TelemetryInspectorScreen } from '@/src/screens/TelemetryInspectorScreen';
 
 import { AdvisorWorkspaceScreen } from '@/src/screens/advisor/AdvisorWorkspaceScreen';
 import { ContactDetailScreen } from '@/src/screens/advisor/ContactDetailScreen';
@@ -52,8 +53,10 @@ import { ComputeTargetSwitcher } from '@/src/components/ComputeTargetSwitcher';
 import { MeshClientService, UnifiedComputeTarget } from '@/src/services/MeshClientService';
 import ModelFile from '@/modules/model-file/src/ModelFileModule';
 
+import { TelemetryService } from '@/src/services/TelemetryService';
+
 export default function ChatScreen() {
-  const [activeTab, setActiveTab] = useState<'chat' | 'studio' | 'mindspace' | 'advisor'>('chat');
+  const [activeTab, setActiveTab] = useState<'chat' | 'studio' | 'mindspace' | 'advisor' | 'telemetry'>('chat');
   const [conversations, setConversations] = useState<ConversationRecord[]>([]);
   const [activeConv, setActiveConv] = useState<ConversationRecord | null>(null);
   const [messages, setMessages] = useState<MessageRecord[]>([]);
@@ -157,6 +160,7 @@ export default function ChatScreen() {
 
   const switchConversation = async (conv: ConversationRecord) => {
     setActiveConv(conv);
+    TelemetryService.getInstance().setActiveSessionId(conv.id);
     const msgs = await getMessagesByConversation(conv.id);
     setMessages(msgs);
     setStreamingContent('');
@@ -278,7 +282,22 @@ export default function ChatScreen() {
     setStreamingContent('');
 
     try {
-      // 1. Build prompt context (Memories + Tool Signatures + Sliding Context Window)
+      const telemetry = TelemetryService.getInstance();
+      const traceContext = await telemetry.createTurnTraceContext(activeConv.id, currentTarget.nodeId);
+
+      // 1. Record client.context_assembly span (FTS5 + Vector Memory)
+      const ctxSpan = telemetry.startSpan({
+        traceId: traceContext.trace_id,
+        sessionId: activeConv.id,
+        name: 'client.context_assembly',
+        observationType: 'retriever',
+        targetDevice: 'local_snapdragon',
+        attributes: {
+          'rag.query': userText.substring(0, 100),
+          'rag.scope': 'conversation_memory',
+        },
+      });
+
       const memoryContext = await memoryService.retrieveRelevantMemory(userText, activeConv.id);
       const baseSystem =
           (activeConv.system_prompt || 'You are a helpful, concise AI assistant running locally on-device.') +
@@ -287,19 +306,29 @@ export default function ChatScreen() {
       const systemWithTools = toolOrchestrator.formatSystemPromptWithTools(baseSystem, userText);
       const formattedPrompt = ContextManager.buildSlidingContextPrompt(updatedMessages, systemWithTools, 'llama3');
 
-      // 2. Execute the ReAct loop:
-      // - Thin client runs the tool loop and executes tools locally
-      // - Compute heavy token generation streams from local Adreno or remote OP 15 / Desktop RTX
-      const result = await toolOrchestrator.executeAgentLoop(formattedPrompt, userText, {
-        onToken: (token) => setStreamingContent((prev) => prev + token),
-        onMetrics: (m) => setMetrics(m),
-        onToolCallDetected: (toolName, _, step) => {
-          setStreamingContent((prev) => prev + `⚙️ [Step ${step}] Executing: ${toolName}...\n`);
-        },
-        onToolExecutionCompleted: (toolName, res, step) => {
-          setStreamingContent((prev) => prev + `✓ [Step ${step}] ${toolName} finished (${res.executionTimeMs}ms)\n\n`);
-        },
-      });
+      await telemetry.endSpan(ctxSpan, { status: 'OK' });
+
+      // 2. Execute the ReAct loop with TraceContext & Desktop Queue status feedback
+      const result = await toolOrchestrator.executeAgentLoop(
+          formattedPrompt,
+          userText,
+          {
+            onToken: (token) => setStreamingContent((prev) => prev + token),
+            onMetrics: (m) => setMetrics(m),
+            onQueueStatusChange: (qStatus) => setStreamingContent((prev) => prev + `${qStatus}\n`),
+            onToolCallDetected: (toolName, _, step) => {
+              setStreamingContent((prev) => prev + `⚙️ [Step ${step}] Executing: ${toolName}...\n`);
+            },
+            onToolExecutionCompleted: (toolName, res, step) => {
+              setStreamingContent((prev) => prev + `✓ [Step ${step}] ${toolName} finished (${res.executionTimeMs}ms)\n\n`);
+            },
+          },
+          {
+            sessionId: activeConv.id,
+            traceContext,
+            priority: 1,
+          }
+      );
 
       const fullText = result.fullText;
       const generatedTokens = result.metrics.totalTokens;
@@ -392,6 +421,15 @@ export default function ChatScreen() {
               setIsAdvisorWorkspaceOpen(true);
             }}
             onBackToChat={() => setActiveTab('chat')}
+        />
+    );
+  }
+
+  // Telemetry Inspector Screen Routing
+  if (activeTab === 'telemetry') {
+    return (
+        <TelemetryInspectorScreen
+            onBack={() => setActiveTab('chat')}
         />
     );
   }

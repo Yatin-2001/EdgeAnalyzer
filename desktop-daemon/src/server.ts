@@ -11,6 +11,8 @@ import { DiscoveryService } from './mesh/DiscoveryService.js';
 import { OllamaBridge } from './mcp/OllamaBridge.js';
 import { MCPProtocol } from './mcp/MCPProtocol.js';
 import { SystemTelemetry } from './mesh/SystemTelemetry.js';
+import { DesktopTaskQueue } from './queue/DesktopTaskQueue.js';
+import { LangfuseOtlpForwarder } from './telemetry/LangfuseOtlpForwarder.js';
 import type { OllamaModelAllocation } from './mesh/SystemTelemetry.js';
 import type { MeshDeviceMetadata } from './mesh/DeviceStore.js';
 
@@ -22,14 +24,12 @@ const wss = new WebSocketServer({ server, path: '/mcp' });
 app.use(cors());
 app.use(express.json({ limit: '50mb' }));
 
-// Replace getLocalNetworkIp() in desktop-daemon/src/server.ts:
 function getLocalNetworkIp(): string {
     const interfaces = os.networkInterfaces();
     let fallbackIp = '127.0.0.1';
 
     for (const name of Object.keys(interfaces)) {
         const lower = name.toLowerCase();
-        // Ignore virtual WSL, Docker, Hyper-V, VPN, and VirtualBox interfaces
         if (
             lower.includes('vethernet') ||
             lower.includes('wsl') ||
@@ -43,7 +43,6 @@ function getLocalNetworkIp(): string {
 
         for (const net of interfaces[name] || []) {
             if (net.family === 'IPv4' && !net.internal) {
-                // Prefer Wi-Fi or Local Area Connection (Hotspot)
                 if (lower.includes('wi-fi') || lower.includes('wlan') || lower.includes('local area connection')) {
                     return net.address;
                 }
@@ -73,14 +72,16 @@ const discovery = DiscoveryService.getInstance();
 const ollama = OllamaBridge.getInstance();
 const mcp = new MCPProtocol();
 const telemetryService = SystemTelemetry.getInstance();
+const taskQueue = DesktopTaskQueue.getInstance();
+const langfuseForwarder = LangfuseOtlpForwarder.getInstance();
 
 const activeSockets = new Map<string, WebSocket>();
 const lastHeartbeatMap = new Map<string, number>();
 const peerDaemonSockets = new Map<string, WebSocket>();
 
 const LOCAL_NODE_ID = `desktop_${os.hostname().toLowerCase().replace(/[^a-z0-9]/g, '_')}`;
+taskQueue.setLocalNodeId(LOCAL_NODE_ID);
 
-// Helper: Merge an incoming roster into local DeviceStore (Deduplicated RA ∪ RB)
 function mergeClusterRoster(incomingRoster: any[]): void {
     if (!Array.isArray(incomingRoster)) return;
 
@@ -116,7 +117,6 @@ function mergeClusterRoster(incomingRoster: any[]): void {
     }
 }
 
-// Helper: Broadcast peer sync payload to all active devices
 function broadcastPeerRoster(): void {
     const peers = deviceStore.getAll().filter((d) => !d.isRevoked);
     const syncPayload = JSON.stringify({
@@ -140,7 +140,6 @@ function broadcastPeerRoster(): void {
         }
     }
 
-    // Also gossip to connected peer desktop daemons
     for (const [_, socket] of peerDaemonSockets.entries()) {
         if (socket.readyState === WebSocket.OPEN) {
             socket.send(syncPayload);
@@ -170,7 +169,7 @@ app.get('/api/mesh/pin/status', (_req, res) => {
     });
 });
 
-// 2. Handshake Pairing Route (Supports both Mobile Clients and Desktop Federation)
+// 2. Handshake Pairing Route
 app.post('/api/mesh/pair', (req, res) => {
     const { pin, deviceId, deviceName, deviceTier, capabilities, clusterRoster } = req.body;
     if (!pin || !deviceId || !deviceName || !deviceTier) {
@@ -193,7 +192,6 @@ app.post('/api/mesh/pair', (req, res) => {
             },
         });
 
-        // If another desktop is pairing, perform Roster Union on our side
         if (deviceTier === 'thick_desktop' && Array.isArray(clusterRoster)) {
             mergeClusterRoster(clusterRoster);
             console.log(`[Mesh Federation] Ingested ${clusterRoster.length} devices from peer desktop: ${deviceName}`);
@@ -218,7 +216,6 @@ app.post('/api/mesh/pair', (req, res) => {
             }
         }
 
-        // Return our full local roster to the remote desktop so it can complete the union
         const fullLocalRoster = deviceStore.getAll().filter((d) => !d.isRevoked);
 
         res.json({
@@ -230,14 +227,13 @@ app.post('/api/mesh/pair', (req, res) => {
             knownPeers: fullLocalRoster,
         });
 
-        // Broadcast updated union to all local phones
         broadcastPeerRoster();
     } catch (err: any) {
         res.status(401).json({ error: err.message });
     }
 });
 
-// 2b. Outbound Federation Endpoint (Triggered from Admin UI)
+// 2b. Outbound Federation Endpoint
 app.post('/api/mesh/cluster/join', async (req, res) => {
     const { targetIp, targetPort, pin } = req.body;
     if (!targetIp || !pin) {
@@ -249,7 +245,6 @@ app.post('/api/mesh/cluster/join', async (req, res) => {
     try {
         console.log(`[Mesh Federation] Initiating outbound federation to http://${targetIp}:${remotePort}...`);
 
-        // Send our local identity and complete roster to the remote desktop
         const localRoster = deviceStore.getAll().filter((d) => !d.isRevoked);
         const joinRes = await fetch(`http://${targetIp}:${remotePort}/api/mesh/pair`, {
             method: 'POST',
@@ -270,7 +265,6 @@ app.post('/api/mesh/cluster/join', async (req, res) => {
 
         const data = await joinRes.json();
 
-        // Register the remote desktop in our DeviceStore
         deviceStore.upsert({
             deviceId: data.peerNodeId || `desktop_${targetIp.replace(/\./g, '_')}`,
             deviceName: data.peerName || `Desktop (${targetIp})`,
@@ -287,26 +281,45 @@ app.post('/api/mesh/cluster/join', async (req, res) => {
             isRevoked: false,
         });
 
-        // Ingest the remote desktop's full roster (RA ∪ RB)
         if (Array.isArray(data.knownPeers)) {
             mergeClusterRoster(data.knownPeers);
         }
 
-        // Establish persistent WebSocket link to the remote daemon for live gossip
         const remoteWsUrl = `ws://${targetIp}:${remotePort}/mcp?token=${encodeURIComponent(data.meshToken)}`;
         const remoteWs = new WebSocket(remoteWsUrl);
 
         remoteWs.on('open', () => {
             console.log(`[Mesh Federation] 🟢 Live inter-daemon socket open to ${targetIp}:${remotePort}`);
             peerDaemonSockets.set(targetIp, remoteWs);
+            // Send initial high_water_mark map for leaderless telemetry delta sync
+            remoteWs.send(
+                JSON.stringify({
+                    jsonrpc: '2.0',
+                    method: 'mcp.telemetry_hwm',
+                    params: { waterMarks: langfuseForwarder.getHighWaterMarks() },
+                })
+            );
         });
 
-        remoteWs.on('message', (msgData) => {
+        remoteWs.on('message', async (msgData) => {
             try {
                 const parsed = JSON.parse(msgData.toString());
                 if (parsed.method === 'mcp.peer_sync' && Array.isArray(parsed.params?.peers)) {
                     mergeClusterRoster(parsed.params.peers);
                     broadcastPeerRoster();
+                } else if (parsed.method === 'mcp.telemetry_hwm' && parsed.params?.waterMarks) {
+                    const delta = langfuseForwarder.getSpansDelta(parsed.params.waterMarks);
+                    if (delta.length > 0 && remoteWs.readyState === WebSocket.OPEN) {
+                        remoteWs.send(
+                            JSON.stringify({
+                                jsonrpc: '2.0',
+                                method: 'mcp.telemetry_delta',
+                                params: { spans: delta },
+                            })
+                        );
+                    }
+                } else if (parsed.method === 'mcp.telemetry_delta' && Array.isArray(parsed.params?.spans)) {
+                    await langfuseForwarder.ingestSpans(parsed.params.spans);
                 }
             } catch {}
         });
@@ -320,7 +333,6 @@ app.post('/api/mesh/cluster/join', async (req, res) => {
             console.warn(`[Mesh Federation] Inter-daemon link error:`, err);
         });
 
-        // Broadcast the united roster to all local phones
         broadcastPeerRoster();
 
         res.json({
@@ -378,8 +390,7 @@ app.post('/api/mesh/devices/revoke', (req, res) => {
     res.json({ status: 'REVOKED', deviceId });
 });
 
-// 5. Ollama Telemetry Routes
-// 5. Ollama Telemetry Routes
+// 5. Ollama, Queue & Langfuse Telemetry Routes
 app.get('/api/mesh/telemetry', async (req, res) => {
     const gpu = await telemetryService.getGpuStats();
     const systemRam = telemetryService.getSystemRamStats();
@@ -395,7 +406,7 @@ app.get('/api/mesh/telemetry', async (req, res) => {
     };
 
     try {
-        const psRes = await fetch('http://127.0.0.1:11434/api/ps');
+        const psRes = await fetch('[http://127.0.0.1:11434/api/ps](http://127.0.0.1:11434/api/ps)');
         if (psRes.ok) {
             const psData = await psRes.json();
             ollamaAllocation = telemetryService.parseOllamaAllocation(psData.models?.[0]);
@@ -411,19 +422,63 @@ app.get('/api/mesh/telemetry', async (req, res) => {
         systemRam,
         ollama: ollamaAllocation,
         models,
+        queue: {
+            depth: taskQueue.getQueueDepth(),
+        },
+        telemetry: {
+            status: 'ready',
+            collector: 'langfuse',
+            batch_route: '/api/mesh/telemetry/sync',
+            ...langfuseForwarder.getStatusSummary(),
+        },
     });
 });
 
-// 5b. HTTP Streaming Inference Fallback
-app.post('/api/mesh/chat', async (req, res) => {
+// 5a. Mobile Outbox Telemetry Batch Ingestion Route
+app.post('/api/mesh/telemetry/sync', async (req, res) => {
     const authHeader = req.headers.authorization;
     const token = authHeader?.replace('Bearer ', '') || (req.query.token as string);
 
-    if (!token || !deviceStore.getByToken(token)) {
+    if (token && !deviceStore.getByToken(token)) {
         return res.status(403).json({ error: 'UNAUTHORIZED_MESH_TOKEN' });
     }
 
-    const { model, messages } = req.body;
+    const { spans } = req.body || {};
+    if (!Array.isArray(spans)) {
+        return res.status(400).json({ error: 'SPANS_ARRAY_REQUIRED' });
+    }
+
+    try {
+        const syncedIds = await langfuseForwarder.ingestSpans(spans);
+        res.json({
+            status: 'ACK',
+            synced_span_ids: syncedIds,
+        });
+    } catch (err: any) {
+        console.error('[/api/mesh/telemetry/sync Error]:', err);
+        res.status(500).json({ error: err.message || 'Failed to ingest telemetry spans' });
+    }
+});
+
+// 5b. Queue Inspection Endpoint
+app.get('/api/mesh/queue/status', (_req, res) => {
+    res.json({
+        depth: taskQueue.getQueueDepth(),
+        recentTasks: taskQueue.getRecentTasks(25),
+    });
+});
+
+// 5c. HTTP Streaming Inference Fallback (Routed through DesktopTaskQueue for Concurrency = 1)
+app.post('/api/mesh/chat', async (req, res) => {
+    const authHeader = req.headers.authorization;
+    const token = authHeader?.replace('Bearer ', '') || (req.query.token as string);
+    const device = token ? deviceStore.getByToken(token) : null;
+
+    if (!token || !device) {
+        return res.status(403).json({ error: 'UNAUTHORIZED_MESH_TOKEN' });
+    }
+
+    const { model, messages, trace_context, task_id, priority, n_predict } = req.body;
     if (!model || !messages) {
         return res.status(400).json({ error: 'MISSING_PARAMS' });
     }
@@ -432,20 +487,54 @@ app.post('/api/mesh/chat', async (req, res) => {
     res.setHeader('Cache-Control', 'no-cache');
     res.setHeader('Connection', 'keep-alive');
 
-    try {
-        await ollama.streamChat(model, messages, (tokenChunk) => {
-            res.write(`data: ${JSON.stringify({ token: tokenChunk })}\n\n`);
-        });
+    const ack = taskQueue.enqueueTask({
+        task_id,
+        session_id: trace_context?.session_id || `session_${Date.now()}`,
+        trace_id: trace_context?.trace_id || `tr_${Date.now().toString(16)}`,
+        parent_span_id: trace_context?.parent_span_id || `span_http_${Date.now().toString(16)}`,
+        client_device_id: trace_context?.initiator_device_id || device.deviceId,
+        connection_id: `http_${Date.now()}`,
+        priority: priority ?? 1,
+        model,
+        messages,
+        n_predict,
+    });
+
+    res.write(`data: ${JSON.stringify({ type: 'task_queued', ...ack })}\n\n`);
+
+    const onToken = (tokenChunk: string) => {
+        res.write(`data: ${JSON.stringify({ token: tokenChunk })}\n\n`);
+    };
+
+    const onCompleted = (completionPayload: any) => {
+        cleanup();
+        res.write(`data: ${JSON.stringify({ type: 'trace_metrics', ...completionPayload })}\n\n`);
         res.write('data: [DONE]\n\n');
         res.end();
-    } catch (err: any) {
-        console.error('[server.ts /api/mesh/chat Error]:', err);
+    };
+
+    const onFailed = (err: Error) => {
+        cleanup();
         res.write(`data: ${JSON.stringify({ error: err.message })}\n\n`);
         res.end();
-    }
+    };
+
+    const cleanup = () => {
+        taskQueue.off(`task:${ack.task_id}:token`, onToken);
+        taskQueue.off(`task:${ack.task_id}:completed`, onCompleted);
+        taskQueue.off(`task:${ack.task_id}:failed`, onFailed);
+    };
+
+    req.on('close', () => {
+        cleanup();
+    });
+
+    taskQueue.on(`task:${ack.task_id}:token`, onToken);
+    taskQueue.on(`task:${ack.task_id}:completed`, onCompleted);
+    taskQueue.on(`task:${ack.task_id}:failed`, onFailed);
 });
 
-// 6. WebSocket Authentication & Heartbeat Pipeline
+// 6. WebSocket Authentication, Task Queue Binding & Heartbeat Pipeline
 wss.on('connection', (ws, req) => {
     const url = new URL(req.url || '', `http://${req.headers.host}`);
     const token = url.searchParams.get('token');
@@ -462,7 +551,9 @@ wss.on('connection', (ws, req) => {
     }
 
     const { deviceId } = device;
+    const connectionId = `ws_${deviceId}_${Date.now()}`;
     const currentIp = normalizeIp(req.socket.remoteAddress);
+
     device.network.ip = currentIp;
     if (device.deviceTier === 'thick_mobile' && (!device.network.port || device.network.port === 8082)) {
         device.network.port = 8765;
@@ -471,6 +562,7 @@ wss.on('connection', (ws, req) => {
 
     activeSockets.set(deviceId, ws);
     lastHeartbeatMap.set(deviceId, Date.now());
+    taskQueue.registerConnection(connectionId, ws);
 
     console.log(`[Mesh Socket] 🟢 Online: ${device.deviceName} (${deviceId}) from IP: ${currentIp}`);
 
@@ -508,19 +600,45 @@ wss.on('connection', (ws, req) => {
                         status: 'ready',
                         vramUsageBytes: telemetry.vramUsageBytes,
                         activeModel: telemetry.activeModel,
-                        activeTask: null,
+                        activeTask: taskQueue.getQueueDepth() > 0 ? 'busy' : null,
+                        queueDepth: taskQueue.getQueueDepth(),
+                        telemetry: {
+                            status: 'ready',
+                            collector: 'langfuse',
+                            batch_route: '/api/mesh/telemetry/sync',
+                        },
                     })
                 );
                 return;
             }
+
+            // Inter-daemon leaderless telemetry gossip
+            if (parsed.method === 'mcp.telemetry_hwm' && parsed.params?.waterMarks) {
+                const delta = langfuseForwarder.getSpansDelta(parsed.params.waterMarks);
+                if (delta.length > 0 && ws.readyState === WebSocket.OPEN) {
+                    ws.send(
+                        JSON.stringify({
+                            jsonrpc: '2.0',
+                            method: 'mcp.telemetry_delta',
+                            params: { spans: delta },
+                        })
+                    );
+                }
+                return;
+            }
+            if (parsed.method === 'mcp.telemetry_delta' && Array.isArray(parsed.params?.spans)) {
+                await langfuseForwarder.ingestSpans(parsed.params.spans);
+                return;
+            }
         } catch {}
 
-        await mcp.handleMessage(ws, raw);
+        await mcp.handleMessage(ws, raw, { deviceId, connectionId });
     });
 
     const cleanup = () => {
         activeSockets.delete(deviceId);
         lastHeartbeatMap.delete(deviceId);
+        taskQueue.unregisterConnection(connectionId);
         console.log(`[Mesh Socket] 🔴 Disconnected: ${device.deviceName} (${deviceId})`);
     };
 
@@ -531,6 +649,7 @@ wss.on('connection', (ws, req) => {
     });
 });
 
+// Periodic inter-daemon telemetry high-water mark sync (every 20s)
 setInterval(() => {
     const now = Date.now();
     for (const [deviceId, lastSeen] of lastHeartbeatMap.entries()) {
@@ -544,6 +663,19 @@ setInterval(() => {
             lastHeartbeatMap.delete(deviceId);
         }
     }
+
+    if (peerDaemonSockets.size > 0) {
+        const hwmPayload = JSON.stringify({
+            jsonrpc: '2.0',
+            method: 'mcp.telemetry_hwm',
+            params: { waterMarks: langfuseForwarder.getHighWaterMarks() },
+        });
+        for (const [_, sock] of peerDaemonSockets.entries()) {
+            if (sock.readyState === WebSocket.OPEN) {
+                sock.send(hwmPayload);
+            }
+        }
+    }
 }, 4000);
 
 app.use((req, res, next) => {
@@ -554,7 +686,7 @@ app.use((req, res, next) => {
 });
 
 server.listen(PORT, '0.0.0.0', () => {
-    console.log(`[Desktop Daemon] Listening on http://0.0.0.0:${PORT}`);
+    console.log(`[Desktop Daemon] Listening on [http://0.0.0.0](http://0.0.0.0):${PORT}`);
     console.log(`[Desktop Daemon] Local LAN IP: ${getLocalNetworkIp()}:${PORT}`);
     discovery.start(PORT);
 });
