@@ -4,29 +4,7 @@
     <option name="autoReloadType" value="NONE" />
   </component>
   <component name="ChangeListManager">
-    <list default="true" id="a200b66f-9d5e-4280-b810-e185de6677ab" name="Changes" comment="">
-      <change afterPath="$PROJECT_DIR$/.idea/vcs.xml" afterDir="false" />
-      <change afterPath="$PROJECT_DIR$/app-code/src/screens/TelemetryInspectorScreen.tsx" afterDir="false" />
-      <change afterPath="$PROJECT_DIR$/app-code/src/services/TelemetryService.ts" afterDir="false" />
-      <change afterPath="$PROJECT_DIR$/desktop-daemon/src/queue/DesktopTaskQueue.ts" afterDir="false" />
-      <change afterPath="$PROJECT_DIR$/desktop-daemon/src/telemetry/LangfuseOtlpForwarder.ts" afterDir="false" />
-      <change beforePath="$PROJECT_DIR$/.idea/caches/deviceStreaming.xml" beforeDir="false" afterPath="$PROJECT_DIR$/.idea/caches/deviceStreaming.xml" afterDir="false" />
-      <change beforePath="$PROJECT_DIR$/.idea/workspace.xml" beforeDir="false" afterPath="$PROJECT_DIR$/.idea/workspace.xml" afterDir="false" />
-      <change beforePath="$PROJECT_DIR$/app-code/app/index.tsx" beforeDir="false" afterPath="$PROJECT_DIR$/app-code/app/index.tsx" afterDir="false" />
-      <change beforePath="$PROJECT_DIR$/app-code/src/components/ComputeTargetSwitcher.tsx" beforeDir="false" afterPath="$PROJECT_DIR$/app-code/src/components/ComputeTargetSwitcher.tsx" afterDir="false" />
-      <change beforePath="$PROJECT_DIR$/app-code/src/components/ConversationDrawer.tsx" beforeDir="false" afterPath="$PROJECT_DIR$/app-code/src/components/ConversationDrawer.tsx" afterDir="false" />
-      <change beforePath="$PROJECT_DIR$/app-code/src/database/db.ts" beforeDir="false" afterPath="$PROJECT_DIR$/app-code/src/database/db.ts" afterDir="false" />
-      <change beforePath="$PROJECT_DIR$/app-code/src/database/repository.ts" beforeDir="false" afterPath="$PROJECT_DIR$/app-code/src/database/repository.ts" afterDir="false" />
-      <change beforePath="$PROJECT_DIR$/app-code/src/screens/StudioScreen.tsx" beforeDir="false" afterPath="$PROJECT_DIR$/app-code/src/screens/StudioScreen.tsx" afterDir="false" />
-      <change beforePath="$PROJECT_DIR$/app-code/src/services/MeshClientService.ts" beforeDir="false" afterPath="$PROJECT_DIR$/app-code/src/services/MeshClientService.ts" afterDir="false" />
-      <change beforePath="$PROJECT_DIR$/app-code/src/services/MindspaceRAGService.ts" beforeDir="false" afterPath="$PROJECT_DIR$/app-code/src/services/MindspaceRAGService.ts" afterDir="false" />
-      <change beforePath="$PROJECT_DIR$/app-code/src/services/MindspaceSynthesisService.ts" beforeDir="false" afterPath="$PROJECT_DIR$/app-code/src/services/MindspaceSynthesisService.ts" afterDir="false" />
-      <change beforePath="$PROJECT_DIR$/app-code/src/services/ToolOrchestrator.ts" beforeDir="false" afterPath="$PROJECT_DIR$/app-code/src/services/ToolOrchestrator.ts" afterDir="false" />
-      <change beforePath="$PROJECT_DIR$/desktop-daemon/.gitignore" beforeDir="false" afterPath="$PROJECT_DIR$/desktop-daemon/.gitignore" afterDir="false" />
-      <change beforePath="$PROJECT_DIR$/desktop-daemon/src/mcp/MCPProtocol.ts" beforeDir="false" afterPath="$PROJECT_DIR$/desktop-daemon/src/mcp/MCPProtocol.ts" afterDir="false" />
-      <change beforePath="$PROJECT_DIR$/desktop-daemon/src/mcp/OllamaBridge.ts" beforeDir="false" afterPath="$PROJECT_DIR$/desktop-daemon/src/mcp/OllamaBridge.ts" afterDir="false" />
-      <change beforePath="$PROJECT_DIR$/desktop-daemon/src/server.ts" beforeDir="false" afterPath="$PROJECT_DIR$/desktop-daemon/src/server.ts" afterDir="false" />
-    </list>
+    <list default="true" id="a200b66f-9d5e-4280-b810-e185de6677ab" name="Changes" comment="" />
     <option name="SHOW_DIALOG" value="false" />
     <option name="HIGHLIGHT_CONFLICTS" value="true" />
     <option name="HIGHLIGHT_NON_ACTIVE_CHANGELIST" value="false" />
@@ -82,6 +60,7 @@
     "ignore.virus.scanning.warn.message": "true",
     "javascript.preferred.runtime.type.id": "node",
     "kotlin-language-version-configured": "true",
+    "last_opened_file_path": "C:/Users/gupta/Desktop/EdgeAnaLyzer",
     "node.js.detected.package.eslint": "true",
     "node.js.detected.package.jshint": "true",
     "node.js.selected.package.eslint": "(autodetect)",
@@ -92,6 +71,15 @@
     "ts.external.directory.path": "C:\\Users\\gupta\\Desktop\\EdgeAnaLyzer\\desktop-daemon\\admin-ui\\node_modules\\typescript\\lib"
   }
 }]]></component>
+  <component name="RecentsManager">
+    <key name="CopyFile.RECENT_KEYS">
+      <recent name="C:\Users\gupta\Desktop\EdgeAnaLyzer" />
+    </key>
+    <key name="MoveFile.RECENT_KEYS">
+      <recent name="C:\Users\gupta\Desktop\EdgeAnaLyzer\desktop-daemon" />
+      <recent name="C:\Users\gupta\Desktop\EdgeAnaLyzer\app-code" />
+    </key>
+  </component>
   <component name="SharedIndexes">
     <attachedChunks>
       <set>
@@ -136,7 +124,8 @@
       <workItem from="1792831861424" duration="14621000" />
       <workItem from="1792960116945" duration="229000" />
       <workItem from="1794319882873" duration="16450000" />
-      <workItem from="1795367261939" duration="8663000" />
+      <workItem from="1795367261939" duration="9076000" />
+      <workItem from="1795513005770" duration="281000" />
     </task>
     <servers />
   </component>
