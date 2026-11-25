@@ -469,6 +469,11 @@ export class LLMService {
    * Attempts native llama.rn `jinja: true` + `tools` first inside try/catch; falls back safely
    * to prompt-formatted execution + JSON tool extraction for GGUFs without Jinja tool metadata.
    */
+  /**
+   * MVP 4 OpenAI-Compatible Completion Engine (used by POST /v1/edge/chat & ToolOrchestrator).
+   * Attempts native llama.rn `jinja: true` + `tools` first inside try/catch; falls back safely
+   * to prompt-formatted execution + JSON tool extraction for GGUFs without Jinja tool metadata.
+   */
   public async streamOpenAIChat(
       options: OpenAIChatExecutionOptions,
       callbacks: OpenAIChatStreamCallbacks = {}
@@ -495,6 +500,7 @@ export class LLMService {
       const t = txt.trimStart();
       return t.startsWith('{') || t.startsWith('<|python_tag|>') || t.startsWith('<tool_call>');
     };
+
     const normalizedMessages = options.messages.map((m) => ({
       ...m,
       role: m.role === 'developer' ? 'system' : m.role,
@@ -565,7 +571,7 @@ export class LLMService {
 
           if (tChunk) {
             fullText += tChunk;
-            // When tools are present, suppress raw JSON tool syntax until finalized if it starts with '{'
+            // Suppress raw JSON / <|python_tag|> tool syntax until finalized
             if (!hasTools || !isRawToolPrefix(fullText)) {
               callbacks.onDelta?.({ content: tChunk });
             }
@@ -661,7 +667,7 @@ export class LLMService {
           normalizedToolCalls = extracted;
           fullText = '';
         } else if (isRawToolPrefix(fullText)) {
-          // It started with '{' (so we held streaming) but wasn't a tool call (e.g. json_object output)
+          // Held streaming due to prefix, but wasn't a tool call (e.g. json_object output)
           callbacks.onDelta?.({ content: fullText });
         }
       }
