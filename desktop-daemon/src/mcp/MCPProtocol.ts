@@ -1,10 +1,12 @@
 import { WebSocket } from 'ws';
 import { DesktopTaskQueue } from '../queue/DesktopTaskQueue.js';
 import { LangfuseOtlpForwarder } from '../telemetry/LangfuseOtlpForwarder.js';
+import { AgentRunManager } from '../agents/AgentRunManager.js';
 
 export class MCPProtocol {
     private taskQueue = DesktopTaskQueue.getInstance();
     private telemetryForwarder = LangfuseOtlpForwarder.getInstance();
+    private agentRuns = AgentRunManager.getInstance();
 
     public async handleMessage(
         ws: WebSocket,
@@ -25,6 +27,134 @@ export class MCPProtocol {
             params?.client_device_id ||
             context.deviceId ||
             'mobile_client';
+
+        // =====================================================================
+        // MVP 4: Agent Control Plane WebSocket RPCs (Shared by Mobile & Admin UI)
+        // =====================================================================
+
+        if (method === 'agent.run_start') {
+            const agentId = typeof params?.agentId === 'string' ? params.agentId : '';
+            const inputs =
+                params?.inputs && typeof params.inputs === 'object' ? params.inputs : {};
+            const originClientId =
+                typeof params?.originClientId === 'string' && params.originClientId.trim()
+                    ? params.originClientId.trim()
+                    : context.deviceId?.startsWith('admin_ui:')
+                        ? context.deviceId
+                        : `mobile:${clientDeviceId}`;
+
+            if (!agentId) {
+                if (ws.readyState === WebSocket.OPEN) {
+                    ws.send(
+                        JSON.stringify({
+                            jsonrpc: '2.0',
+                            id,
+                            error: { code: -32602, message: 'agentId is required' },
+                        })
+                    );
+                }
+                return;
+            }
+
+            try {
+                const started = await this.agentRuns.startRun({
+                    agentId,
+                    inputs,
+                    originClientId,
+                });
+                if (ws.readyState === WebSocket.OPEN) {
+                    ws.send(
+                        JSON.stringify({
+                            jsonrpc: '2.0',
+                            id,
+                            result: started,
+                        })
+                    );
+                }
+            } catch (err: any) {
+                if (ws.readyState === WebSocket.OPEN) {
+                    ws.send(
+                        JSON.stringify({
+                            jsonrpc: '2.0',
+                            id,
+                            error: { code: -32000, message: err?.message || 'Failed to start agent run' },
+                        })
+                    );
+                }
+            }
+            return;
+        }
+
+        if (method === 'agent.run_resume') {
+            const runId = typeof params?.runId === 'string' ? params.runId : '';
+            const interruptId = typeof params?.interruptId === 'string' ? params.interruptId : '';
+            const resume = params?.resume;
+            const resolvedByClientId = context.deviceId?.startsWith('admin_ui:')
+                ? context.deviceId
+                : `mobile:${clientDeviceId}`;
+
+            if (!runId || !interruptId) {
+                if (ws.readyState === WebSocket.OPEN) {
+                    ws.send(
+                        JSON.stringify({
+                            jsonrpc: '2.0',
+                            id,
+                            error: { code: -32602, message: 'runId and interruptId are required' },
+                        })
+                    );
+                }
+                return;
+            }
+
+            const result = this.agentRuns.resumeRun({
+                runId,
+                interruptId,
+                resume,
+                resolvedByClientId,
+            });
+            if (ws.readyState === WebSocket.OPEN) {
+                ws.send(
+                    JSON.stringify({
+                        jsonrpc: '2.0',
+                        id,
+                        result,
+                    })
+                );
+            }
+            return;
+        }
+
+        if (method === 'agent.run_cancel') {
+            const runId = typeof params?.runId === 'string' ? params.runId : '';
+            if (!runId) {
+                if (ws.readyState === WebSocket.OPEN) {
+                    ws.send(
+                        JSON.stringify({
+                            jsonrpc: '2.0',
+                            id,
+                            error: { code: -32602, message: 'runId is required' },
+                        })
+                    );
+                }
+                return;
+            }
+
+            const result = await this.agentRuns.cancelRun(runId);
+            if (ws.readyState === WebSocket.OPEN) {
+                ws.send(
+                    JSON.stringify({
+                        jsonrpc: '2.0',
+                        id,
+                        result,
+                    })
+                );
+            }
+            return;
+        }
+
+        // =====================================================================
+        // MVP 3: Queued Inference & Telemetry Sync RPCs
+        // =====================================================================
 
         // 1. Primary Queued Task Submission & Priority-2 Tool Resumption
         if (method === 'mcp.submit_task' || method === 'mcp.resume_task' || method === 'mcp.stream_chat') {

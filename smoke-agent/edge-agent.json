@@ -1,0 +1,16 @@
+{
+  "id": "smoke-test-agent",
+  "name": "Edge Smoke Test Agent",
+  "version": "0.1.0",
+  "description": "Verifies 5-gate validation, stdout isolation, todos, interrupt CAS resume, artifacts, and Windows process-tree cancellation.",
+  "runtime": {
+    "entrypoint": "smoke_agent:build_agent",
+    "timeout_sec": 120
+  },
+  "inputs": [
+    { "key": "brief", "label": "Test Prompt", "type": "textarea", "required": true, "default": "Verify EdgeAnalyzer Milestone B" },
+    { "key": "sleep_sec", "label": "Delay Before Finish (sec)", "type": "number", "default": 0 }
+  ],
+  "mounts": {},
+  "required_env": []
+}

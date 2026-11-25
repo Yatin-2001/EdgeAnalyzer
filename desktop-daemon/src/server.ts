@@ -19,6 +19,9 @@ import { AuthTokenRegistry, createOpenAIGatewayRouter } from './router/OpenAIGat
 import type { ClusterNodeState } from './router/ClusterStateService.js';
 import type { OllamaModelAllocation } from './mesh/SystemTelemetry.js';
 import type { MeshDeviceMetadata } from './mesh/DeviceStore.js';
+import { AgentRegistryService } from './agents/AgentRegistryService.js';
+import { AgentRunManager } from './agents/AgentRunManager.js';
+import { createAgentRouter } from './agents/AgentRoutes.js';
 
 const PORT = parseInt(process.env.PORT || '8080', 10);
 const app = express();
@@ -98,6 +101,45 @@ clusterState.initialize(LOCAL_NODE_ID, LOCAL_NODE_NAME, LOCAL_ENDPOINT_URL);
 
 // Mount MVP 4 OpenAI Mesh Gateway & Loopback Admin Token Routes
 app.use(createOpenAIGatewayRouter());
+
+const agentRegistry = AgentRegistryService.getInstance();
+const agentRunManager = AgentRunManager.getInstance();
+agentRunManager.setDaemonPort(PORT);
+
+// Mount MVP 4 Agent Registry & Run Control Plane REST Routes
+app.use(createAgentRouter());
+
+function broadcastToControlPlaneClients(method: string, params: Record<string, unknown>): void {
+    const frame = JSON.stringify({ jsonrpc: '2.0', method, params });
+    for (const [, socket] of activeSockets.entries()) {
+        if (socket.readyState === WebSocket.OPEN) {
+            socket.send(frame);
+        }
+    }
+    for (const [, socket] of adminSockets.entries()) {
+        if (socket.readyState === WebSocket.OPEN) {
+            socket.send(frame);
+        }
+    }
+}
+
+agentRegistry.on('catalog_updated', () => {
+    broadcastToControlPlaneClients('agent.catalog_updated', {
+        agents: agentRegistry.listAgents(false),
+    });
+});
+
+agentRunManager.on('run_event', (evt) => {
+    broadcastToControlPlaneClients('agent.run_event', evt);
+});
+
+agentRunManager.on('run_interrupt', (evt) => {
+    broadcastToControlPlaneClients('agent.run_interrupt', evt);
+});
+
+agentRunManager.on('run_resumed', (evt) => {
+    broadcastToControlPlaneClients('agent.run_resumed', evt);
+});
 
 function mergeClusterRoster(incomingRoster: any[]): void {
     if (!Array.isArray(incomingRoster)) return;

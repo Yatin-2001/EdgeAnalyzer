@@ -498,7 +498,11 @@ export class LLMService {
     const hasTools = Array.isArray(options.tools) && options.tools.length > 0;
     const isRawToolPrefix = (txt: string): boolean => {
       const t = txt.trimStart();
-      return t.startsWith('{') || t.startsWith('<|python_tag|>') || t.startsWith('<tool_call>');
+      return (
+          t.startsWith('{') ||
+          t.startsWith('<|python_tag|>') ||
+          t.startsWith('<tool_call>')
+      );
     };
 
     const normalizedMessages = options.messages.map((m) => ({
@@ -571,7 +575,6 @@ export class LLMService {
 
           if (tChunk) {
             fullText += tChunk;
-            // Suppress raw JSON / <|python_tag|> tool syntax until finalized
             if (!hasTools || !isRawToolPrefix(fullText)) {
               callbacks.onDelta?.({ content: tChunk });
             }
@@ -588,7 +591,8 @@ export class LLMService {
         if (Array.isArray(result?.tool_calls) && result.tool_calls.length > 0) {
           normalizedToolCalls = LLMService.normalizeToolCalls(result.tool_calls);
         }
-        promptTokens = result?.tokens_evaluated || Math.ceil(JSON.stringify(normalizedMessages).length / 3.8);
+        promptTokens =
+            result?.tokens_evaluated || Math.ceil(JSON.stringify(normalizedMessages).length / 3.8);
         completionTokens = result?.tokens_predicted || tokenCount;
         stoppedLimit = !!result?.stopped_limit;
       } catch (jinjaErr) {
@@ -667,7 +671,6 @@ export class LLMService {
           normalizedToolCalls = extracted;
           fullText = '';
         } else if (isRawToolPrefix(fullText)) {
-          // Held streaming due to prefix, but wasn't a tool call (e.g. json_object output)
           callbacks.onDelta?.({ content: fullText });
         }
       }

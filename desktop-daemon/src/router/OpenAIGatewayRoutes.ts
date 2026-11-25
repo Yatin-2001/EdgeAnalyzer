@@ -13,6 +13,8 @@ import type { ClusterNodeState } from './ClusterStateService.js';
 import { HybridMeshRouter } from './HybridMeshRouter.js';
 import type { AgentRoleHint, RoutingDecision } from './HybridMeshRouter.js';
 import { MobileWorkerAdapter } from './MobileWorkerAdapter.js';
+import { AgentRunManager } from '../agents/AgentRunManager.js';
+
 
 export interface EphemeralRunTokenMeta {
     runId: string;
@@ -328,22 +330,15 @@ export function createOpenAIGatewayRouter(): Router {
 
             if (runId) {
                 try {
-                    db.prepare(`
-                        INSERT INTO agent_run_events (run_id, event_type, payload_json, created_at_ms)
-                        VALUES (?, 'route_decision', ?, ?)
-                    `).run(
-                        runId,
-                        JSON.stringify({
-                            requested_model: body.model,
-                            resolved_node_id: decision.node.nodeId,
-                            resolved_node_name: decision.node.nodeName,
-                            resolved_tier: decision.node.tier,
-                            resolved_model: decision.resolvedModel,
-                            routing_reason: effectiveReason,
-                            estimated_tokens: decision.estimatedInputTokens,
-                        }),
-                        Date.now()
-                    );
+                    AgentRunManager.getInstance().appendEvent(runId, 'route_decision', {
+                        requested_model: body.model,
+                        resolved_node_id: decision.node.nodeId,
+                        resolved_node_name: decision.node.nodeName,
+                        resolved_tier: decision.node.tier,
+                        resolved_model: decision.resolvedModel,
+                        routing_reason: effectiveReason,
+                        estimated_tokens: decision.estimatedInputTokens,
+                    });
                 } catch {}
             }
 
@@ -508,10 +503,11 @@ export function createOpenAIGatewayRouter(): Router {
                             onStatus: (statusEvt) => {
                                 if (runId) {
                                     try {
-                                        db.prepare(`
-                                            INSERT INTO agent_run_events (run_id, event_type, payload_json, created_at_ms)
-                                            VALUES (?, 'status', ?, ?)
-                                        `).run(runId, JSON.stringify(statusEvt), Date.now());
+                                        AgentRunManager.getInstance().appendEvent(
+                                            runId,
+                                            'status',
+                                            statusEvt as Record<string, unknown>
+                                        );
                                     } catch {}
                                 }
                             },

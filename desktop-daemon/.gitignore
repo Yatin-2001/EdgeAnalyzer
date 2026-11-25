@@ -1,5 +1,5 @@
 node_modules/
 paired_devices.json
-db/
+/db/
 .env
 .env.*

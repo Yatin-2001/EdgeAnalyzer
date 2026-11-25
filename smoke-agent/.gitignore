@@ -1,0 +1,35 @@
+# Virtual environments (recreated via `uv sync --frozen`)
+.venv/
+venv/
+env/
+
+# Python bytecode & caches
+__pycache__/
+*.py[cod]
+*$py.class
+.pytest_cache/
+.ruff_cache/
+.mypy_cache/
+
+# Environment secrets
+.env
+.env.*
+!.env.example
+
+# SQLite databases & WAL sidecars
+*.db
+*.db-wal
+*.db-shm
+*.sqlite
+*.sqlite3
+
+# Generated run outputs & logs
+runs/
+outputs/
+*.log
+
+# OS & editor artifacts
+.DS_Store
+Thumbs.db
+.vscode/
+.idea/
