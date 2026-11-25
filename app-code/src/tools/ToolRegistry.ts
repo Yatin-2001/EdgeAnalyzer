@@ -1,4 +1,4 @@
-import { ToolExecutor, ToolDefinition } from './types';
+import { ToolExecutor, ToolDefinition, OpenAIToolDefinition } from './types';
 import { CalculatorTool } from './builtin/calculator';
 import { DeviceLocationTool } from './builtin/location';
 import { WeatherTool } from './builtin/weather';
@@ -40,5 +40,16 @@ export class ToolRegistry {
 
     public getAllDefinitions(): ToolDefinition[] {
         return Array.from(this.tools.values()).map((t) => t.definition);
+    }
+
+    public getOpenAIToolDefinitions(): OpenAIToolDefinition[] {
+        return this.getAllDefinitions().map((def) => ({
+            type: 'function',
+            function: {
+                name: def.name,
+                description: def.description,
+                parameters: def.parameters,
+            },
+        }));
     }
 }

@@ -26,6 +26,7 @@ import {
   ConversationRecord,
   MessageRecord,
   ModelRecord,
+  getAllModels
 } from '@/src/database/repository';
 
 import { LLMService, LLMStatus, PerformanceMetrics } from '@/src/services/LLMService';
@@ -100,6 +101,7 @@ export default function ChatScreen() {
   useEffect(() => {
     (async () => {
       await embeddingService.initialize();
+      await syncInstalledModelsToWorker();
       const allConvs = await getAllConversations();
       setConversations(allConvs);
       if (allConvs.length > 0) {
@@ -158,6 +160,200 @@ export default function ChatScreen() {
     };
   }, [llm]);
 
+  // Listen for MVP 4 OpenAI-compatible edge chat requests arriving on port 8765 (/v1/edge/chat)
+  useEffect(() => {
+    const subscription = ModelFile.addListener(
+        'onWorkerEdgeChatRequest',
+        async (event: { requestId: string; payloadJson: string }) => {
+          const { requestId, payloadJson } = event;
+          try {
+            const payload = JSON.parse(payloadJson || '{}');
+            const requestedModel =
+                typeof payload.model === 'string' ? payload.model.trim() : '';
+
+            const currentLoaded = llm.getLoadedModel();
+            const needsSwap =
+                requestedModel.length > 0 &&
+                (!currentLoaded ||
+                    currentLoaded.name.toLowerCase() !== requestedModel.toLowerCase());
+            const needsColdLoad = !requestedModel && !llm.isReady();
+
+            if (needsSwap || needsColdLoad) {
+              if (llm.getStatus() === 'GENERATING' || llm.getStatus() === 'LOADING') {
+                await ModelFile.pushWorkerSseEvent?.(
+                    requestId,
+                    'error',
+                    JSON.stringify({
+                      message: `Mobile worker busy (${llm.getStatus()})`,
+                      code: 'WORKER_BUSY',
+                    })
+                );
+                return;
+              }
+
+              const allModels = await getAllModels();
+              const targetRecord = needsSwap
+                  ? allModels.find(
+                  (m) =>
+                      m.is_embedding === 0 &&
+                      m.original_name.toLowerCase() === requestedModel.toLowerCase()
+              ) || null
+                  : await getDefaultChatModel();
+
+              if (!targetRecord) {
+                await ModelFile.pushWorkerSseEvent?.(
+                    requestId,
+                    'error',
+                    JSON.stringify({
+                      message: `Requested model "${requestedModel || 'default'}" not found on mobile worker`,
+                      code: 'MODEL_NOT_FOUND',
+                    })
+                );
+                return;
+              }
+
+              const previousModelName = currentLoaded?.name || 'None';
+              const previousRecord = currentLoaded
+                  ? allModels.find(
+                  (m) => m.original_name.toLowerCase() === currentLoaded.name.toLowerCase()
+              ) || null
+                  : null;
+
+              const switchMsg = `Switching mobile model to ${targetRecord.original_name} (expect 5-10s delay)...`;
+              setWorkerSwitchStatus(`🔄 ${switchMsg}`);
+
+              // Pre-stream status event: keeps connection alive without blocking Desktop pre-stream failover
+              await ModelFile.pushWorkerSseEvent?.(
+                  requestId,
+                  'status',
+                  JSON.stringify({
+                    type: 'model_switching',
+                    from: previousModelName,
+                    to: targetRecord.original_name,
+                    message: switchMsg,
+                  })
+              );
+
+              try {
+                const ok = await ensureModelLoaded(targetRecord.id, {
+                  throwOnError: true,
+                  suppressAlert: true,
+                });
+                if (!ok || !llm.isReady()) {
+                  throw new Error(`Model "${targetRecord.original_name}" did not reach READY state`);
+                }
+              } catch (swapErr: any) {
+                const swapErrMsg = swapErr?.message || String(swapErr);
+                await ModelFile.pushWorkerSseEvent?.(
+                    requestId,
+                    'error',
+                    JSON.stringify({
+                      message: `Model hot-swap to "${targetRecord.original_name}" failed: ${swapErrMsg}`,
+                      code: 'MODEL_SWITCH_FAILED',
+                    })
+                );
+                // Best-effort background recovery back to previous model
+                if (previousRecord && !llm.isReady()) {
+                  ensureModelLoaded(previousRecord.id, { suppressAlert: true }).catch(() => {});
+                }
+                return;
+              } finally {
+                setWorkerSwitchStatus(null);
+              }
+            }
+
+            if (!llm.isReady()) {
+              await ModelFile.pushWorkerSseEvent?.(
+                  requestId,
+                  'error',
+                  JSON.stringify({ message: 'Host model is not ready', code: 'NO_MODEL_LOADED' })
+              );
+              return;
+            }
+
+            const loaded = llm.getLoadedModel();
+            const estimatedTokens = Math.ceil(
+                (JSON.stringify(payload.messages || []).length +
+                    JSON.stringify(payload.tools || []).length) /
+                3.8
+            );
+
+            if (loaded && estimatedTokens > loaded.nCtx) {
+              await ModelFile.pushWorkerSseEvent?.(
+                  requestId,
+                  'error',
+                  JSON.stringify({
+                    message: `Prompt (~${estimatedTokens} tok) exceeds loaded n_ctx (${loaded.nCtx})`,
+                    code: 'CTX_EXCEEDED',
+                  })
+              );
+              return;
+            }
+
+            const result = await llm.streamOpenAIChat(
+                {
+                  messages: Array.isArray(payload.messages) ? payload.messages : [],
+                  tools: Array.isArray(payload.tools) ? payload.tools : undefined,
+                  tool_choice: payload.tool_choice,
+                  response_format: payload.response_format,
+                  temperature: payload.temperature,
+                  max_tokens: payload.max_tokens,
+                },
+                {
+                  onDelta: (delta) => {
+                    ModelFile.pushWorkerSseEvent?.(
+                        requestId,
+                        'delta',
+                        JSON.stringify(delta)
+                    ).catch(() => {});
+                  },
+                  onToolCalls: (toolCalls) => {
+                    ModelFile.pushWorkerSseEvent?.(
+                        requestId,
+                        'tool_calls',
+                        JSON.stringify({ tool_calls: toolCalls })
+                    ).catch(() => {});
+                  },
+                }
+            );
+
+            await ModelFile.pushWorkerSseEvent?.(
+                requestId,
+                'done',
+                JSON.stringify({
+                  finish_reason: result.finishReason,
+                  usage: result.usage,
+                  metrics: {
+                    ttft_ms: result.metrics.ttftMs,
+                    tok_per_sec: result.metrics.tokensPerSecond,
+                    thermal_state: payload._workerThermalState || 'nominal',
+                  },
+                })
+            );
+          } catch (err: any) {
+            const msg = err?.message || String(err);
+            const code = /out of memory|oom/i.test(msg)
+                ? 'OOM'
+                : /context|n_ctx/i.test(msg)
+                    ? 'CTX_EXCEEDED'
+                    : 'INTERNAL';
+            await ModelFile.pushWorkerSseEvent?.(
+                requestId,
+                'error',
+                JSON.stringify({ message: msg, code })
+            ).catch(() => {});
+          } finally {
+            setWorkerSwitchStatus(null);
+            await ModelFile.finishWorkerInference(requestId).catch(() => {});
+          }
+        }
+    );
+
+    return () => {
+      subscription.remove();
+    };
+  }, [llm]);
+
   const switchConversation = async (conv: ConversationRecord) => {
     setActiveConv(conv);
     TelemetryService.getInstance().setActiveSessionId(conv.id);
@@ -196,7 +392,10 @@ export default function ChatScreen() {
     }
   };
 
-  const ensureModelLoaded = async (targetModelId: string | null) => {
+  const ensureModelLoaded = async (
+      targetModelId: string | null,
+      opts: { throwOnError?: boolean; suppressAlert?: boolean } = {}
+  ): Promise<boolean> => {
     try {
       let selectedRecord: ModelRecord | null = null;
       if (targetModelId) {
@@ -209,7 +408,7 @@ export default function ChatScreen() {
       if (!selectedRecord) {
         setStatus('UNLOADED');
         ModelFile.setWorkerActiveModel('No Model Loaded').catch(() => {});
-        return;
+        return false;
       }
 
       const activeModelInfo = modelManager.getCurrentModel('chat');
@@ -219,7 +418,7 @@ export default function ChatScreen() {
       ) {
         setStatus('READY');
         ModelFile.setWorkerActiveModel(selectedRecord.original_name).catch(() => {});
-        return;
+        return true;
       }
 
       setStatus('LOADING');
@@ -253,13 +452,18 @@ export default function ChatScreen() {
       );
 
       setStatus(llm.getStatus());
-
-      // Sync active model name dynamically to native worker service
       ModelFile.setWorkerActiveModel(prepared.originalName).catch(() => {});
+      return true;
     } catch (error) {
       setStatus('ERROR');
       ModelFile.setWorkerActiveModel('No Model Loaded').catch(() => {});
-      Alert.alert('Model Load Failed', error instanceof Error ? error.message : String(error));
+      if (!opts.suppressAlert) {
+        Alert.alert('Model Load Failed', error instanceof Error ? error.message : String(error));
+      }
+      if (opts.throwOnError) {
+        throw error;
+      }
+      return false;
     }
   };
 
@@ -353,6 +557,25 @@ export default function ChatScreen() {
     } catch (error: any) {
       setStatus(isRemoteTarget ? 'READY' : llm.getStatus());
       Alert.alert('Inference Error', error?.message || String(error));
+    }
+  };
+
+  const [workerSwitchStatus, setWorkerSwitchStatus] = useState<string | null>(null);
+
+  const syncInstalledModelsToWorker = async () => {
+    try {
+      const allModels = await getAllModels();
+      const catalog = allModels
+          .filter((m) => m.is_embedding === 0)
+          .map((m) => ({
+            id: m.id,
+            name: m.original_name,
+            modality: m.modality || 'text',
+            size: m.size_bytes || 0,
+          }));
+      await ModelFile.setWorkerInstalledModels?.(JSON.stringify(catalog));
+    } catch (err) {
+      console.warn('[WorkerCatalog] Failed to sync installed models:', err);
     }
   };
 
@@ -471,6 +694,16 @@ export default function ChatScreen() {
             </View>
         )}
 
+        {/* Remote Mesh Hot-Swap Notification Banner */}
+        {workerSwitchStatus && (
+            <View style={styles.switchBanner}>
+              <ActivityIndicator size="small" color="#FBBF24" />
+              <Text style={styles.switchBannerText} numberOfLines={2}>
+                {workerSwitchStatus}
+              </Text>
+            </View>
+        )}
+
         {/* Telemetry Bar */}
         {metrics && status !== 'LOADING' && (
             <View style={styles.telemetryBar}>
@@ -573,7 +806,10 @@ export default function ChatScreen() {
         {/* Model Registry Modal */}
         <ModelRegistryModal
             visible={isRegistryOpen}
-            onClose={() => setRegistryOpen(false)}
+            onClose={() => {
+              setRegistryOpen(false);
+              syncInstalledModelsToWorker();
+            }}
             onSelectChatModel={(mod) => {
               if (activeConv) {
                 ensureModelLoaded(mod.id);
@@ -617,6 +853,16 @@ const styles = StyleSheet.create({
     gap: 8,
   },
   loadingText: { color: '#38BDF8', fontSize: 12, fontWeight: '600' },
+  switchBanner: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'center',
+    backgroundColor: '#F59E0B20',
+    paddingVertical: 6,
+    paddingHorizontal: 12,
+    gap: 8,
+  },
+  switchBannerText: { color: '#FBBF24', fontSize: 12, fontWeight: '600', flexShrink: 1 },
   telemetryBar: {
     backgroundColor: '#0284C715',
     paddingVertical: 4,

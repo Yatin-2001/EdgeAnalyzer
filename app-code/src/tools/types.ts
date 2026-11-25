@@ -14,6 +14,28 @@ export interface ToolDefinition {
     };
 }
 
+export interface OpenAIToolDefinition {
+    type: 'function';
+    function: {
+        name: string;
+        description: string;
+        parameters: {
+            type: 'object';
+            properties: Record<string, ToolProperty>;
+            required: string[];
+        };
+    };
+}
+
+export interface OpenAIToolCall {
+    id: string;
+    type: 'function';
+    function: {
+        name: string;
+        arguments: string;
+    };
+}
+
 export interface ToolResult {
     success: boolean;
     data?: any;

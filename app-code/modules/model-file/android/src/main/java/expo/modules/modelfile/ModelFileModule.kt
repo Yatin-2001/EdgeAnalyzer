@@ -17,7 +17,7 @@ class ModelFileModule : Module() {
     override fun definition() = ModuleDefinition {
         Name("ModelFile")
 
-        Events("onWorkerInferenceRequest")
+        Events("onWorkerInferenceRequest", "onWorkerEdgeChatRequest")
 
         AsyncFunction("copyContentUriToFile") { sourceUri: String, destinationPath: String ->
             val context: Context =
@@ -146,6 +146,13 @@ class ModelFileModule : Module() {
                     )
                 }
 
+                EdgeComputeWorkerService.onRequestEdgeChat = { requestId, payloadJson ->
+                    this@ModelFileModule.sendEvent(
+                        "onWorkerEdgeChatRequest",
+                        mapOf("requestId" to requestId, "payloadJson" to payloadJson)
+                    )
+                }
+
                 val intent = Intent(context, EdgeComputeWorkerService::class.java).apply {
                     action = EdgeComputeWorkerService.ACTION_START
                 }
@@ -169,6 +176,7 @@ class ModelFileModule : Module() {
             }
             context.startService(intent)
             EdgeComputeWorkerService.onRequestInference = null
+            EdgeComputeWorkerService.onRequestEdgeChat = null
             Log.d("ModelFileModule", "stopWorkerService intent dispatched")
             return@AsyncFunction true
         }
@@ -176,6 +184,20 @@ class ModelFileModule : Module() {
         AsyncFunction("setWorkerActiveModel") { modelName: String ->
             EdgeComputeWorkerService.activeModelName = modelName
             Log.d("ModelFileModule", "setWorkerActiveModel: $modelName")
+            return@AsyncFunction true
+        }
+
+        AsyncFunction("setWorkerModelCapabilities") { modelName: String, nCtx: Int, supportsVision: Boolean ->
+            EdgeComputeWorkerService.activeModelName = modelName
+            EdgeComputeWorkerService.activeModelCtx = if (nCtx > 0) nCtx else 4096
+            EdgeComputeWorkerService.activeModelSupportsVision = supportsVision
+            Log.d("ModelFileModule", "setWorkerModelCapabilities: $modelName (nCtx=$nCtx, vision=$supportsVision)")
+            return@AsyncFunction true
+        }
+
+        AsyncFunction("setWorkerInstalledModels") { modelsJson: String ->
+            EdgeComputeWorkerService.installedModelsJson = modelsJson
+            Log.d("ModelFileModule", "setWorkerInstalledModels updated (${modelsJson.length} chars)")
             return@AsyncFunction true
         }
 
@@ -194,7 +216,6 @@ class ModelFileModule : Module() {
                     val iface = interfaces.nextElement()
                     if (iface.isLoopback || !iface.isUp) continue
                     val name = iface.name.lowercase()
-                    // Skip cellular/tunnel interfaces
                     if (name.startsWith("rmnet") || name.startsWith("tun") || name.startsWith("dummy")) continue
 
                     val addresses = iface.inetAddresses
@@ -202,7 +223,6 @@ class ModelFileModule : Module() {
                         val addr = addresses.nextElement()
                         if (!addr.isLoopbackAddress && addr is Inet4Address) {
                             val ip = addr.hostAddress ?: continue
-                            // Prefer Wi-Fi / Hotspot interfaces (wlan0, ap0, swlan0)
                             if (name.contains("wlan") || name.contains("ap") || name.contains("wifi")) {
                                 return@AsyncFunction ip
                             }
@@ -211,7 +231,7 @@ class ModelFileModule : Module() {
                     }
                 }
                 return@AsyncFunction fallbackIp ?: ""
-            } catch (e: Exception) {
+            } catch (_: Exception) {
                 return@AsyncFunction ""
             }
         }
@@ -219,6 +239,12 @@ class ModelFileModule : Module() {
         AsyncFunction("pushWorkerToken") { requestId: String, token: String ->
             val session = EdgeComputeWorkerService.activeSessions[requestId]
             session?.onToken?.invoke(token)
+            return@AsyncFunction true
+        }
+
+        AsyncFunction("pushWorkerSseEvent") { requestId: String, eventName: String, jsonData: String ->
+            val session = EdgeComputeWorkerService.activeSessions[requestId]
+            session?.onSseEvent?.invoke(eventName, jsonData)
             return@AsyncFunction true
         }
 

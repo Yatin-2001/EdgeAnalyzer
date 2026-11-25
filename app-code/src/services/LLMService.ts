@@ -1,6 +1,7 @@
 import { initLlama, LlamaContext } from 'llama.rn';
 import ModelFile from '../../modules/model-file/src/ModelFileModule';
 import { MeshIdentityService } from './MeshIdentityService';
+import type { OpenAIToolCall, OpenAIToolDefinition } from '../tools/types';
 
 export type LLMStatus =
     | 'UNLOADED'
@@ -12,6 +13,7 @@ export type LLMStatus =
 export interface PerformanceMetrics {
   ttftMs: number;
   totalTokens: number;
+  promptTokens?: number;
   generationTimeSec: number;
   tokensPerSecond: number;
 }
@@ -24,6 +26,7 @@ export interface StreamCallbacks {
 export interface LoadedModel {
   name: string;
   path: string;
+  nCtx: number;
   mmprojPath?: string;
   isVisionCapable: boolean;
 }
@@ -43,8 +46,11 @@ export interface MessageContentPart {
 }
 
 export interface ChatMessage {
-  role: 'system' | 'user' | 'assistant';
-  content: string | MessageContentPart[];
+  role: 'system' | 'developer' | 'user' | 'assistant' | 'tool';
+  content?: string | MessageContentPart[] | null;
+  name?: string;
+  tool_call_id?: string;
+  tool_calls?: OpenAIToolCall[];
 }
 
 export interface CompletionOptions {
@@ -56,6 +62,37 @@ export interface CompletionOptions {
   topP?: number;
   repeatPenalty?: number;
   stop?: string[];
+}
+
+export interface OpenAIChatExecutionOptions {
+  messages: ChatMessage[];
+  tools?: OpenAIToolDefinition[];
+  tool_choice?: string | Record<string, any>;
+  response_format?: {
+    type: 'text' | 'json_object' | 'json_schema';
+    json_schema?: { name?: string; schema?: Record<string, any>; strict?: boolean };
+  };
+  temperature?: number;
+  max_tokens?: number;
+  stop?: string[];
+}
+
+export interface OpenAIChatStreamCallbacks {
+  onDelta?: (delta: { content?: string; reasoning_content?: string }) => void;
+  onToolCalls?: (toolCalls: OpenAIToolCall[]) => void;
+}
+
+export interface OpenAIChatExecutionResult {
+  fullText: string;
+  reasoningText: string;
+  toolCalls: OpenAIToolCall[];
+  finishReason: 'stop' | 'tool_calls' | 'length';
+  usage: {
+    prompt_tokens: number;
+    completion_tokens: number;
+    total_tokens: number;
+  };
+  metrics: PerformanceMetrics;
 }
 
 export class LLMService {
@@ -72,6 +109,14 @@ export class LLMService {
       LLMService.instance = new LLMService();
     }
     return LLMService.instance;
+  }
+
+  public static generateToolCallId(): string {
+    let hex = '';
+    for (let i = 0; i < 8; i++) {
+      hex += Math.floor(Math.random() * 16).toString(16);
+    }
+    return `call_${hex}`;
   }
 
   public getStatus(): LLMStatus {
@@ -136,7 +181,6 @@ export class LLMService {
         const rawRole = match[1];
         const rawContent = match[2];
         if (!rawRole || rawContent === undefined) continue;
-        // Strip trailing ChatML end tags while preserving inner Qwen2-VL vision tags if present
         const content = rawContent.replace(/<\|im_end\|>/g, '').trim();
         if (content.length > 0) {
           messages.push({ role: rawRole === 'tool' ? 'user' : rawRole, content });
@@ -166,7 +210,6 @@ export class LLMService {
         modelName.includes('qwen-vl') ||
         (modelName.includes('qwen') && this.loadedModel?.isVisionCapable);
 
-    // 1. Qwen2-VL / Qwen2.5-VL & ChatML Family (Qwen, SmolVLM, Yi, DeepSeek, Hermes)
     if (
         isQwenVL ||
         this.loadedModel?.isVisionCapable ||
@@ -181,8 +224,6 @@ export class LLMService {
           messages
               .map((m, idx) => {
                 let body = m.content;
-                // If raw prompt formatting is used with Qwen2-VL and images are attached,
-                // prepend Qwen2-VL vision tokens if not already embedded
                 if (
                     isQwenVL &&
                     imageCount > 0 &&
@@ -200,7 +241,6 @@ export class LLMService {
       );
     }
 
-    // 2. Microsoft Phi-3 / Phi-3.5
     if (modelName.includes('phi')) {
       return (
           messages.map((m) => `<|${m.role}|>\n${m.content}<|end|>`).join('\n') +
@@ -208,7 +248,6 @@ export class LLMService {
       );
     }
 
-    // 3. Google Gemma / Gemma 2
     if (modelName.includes('gemma')) {
       let systemPrefix = '';
       const turns: string[] = [];
@@ -225,7 +264,6 @@ export class LLMService {
       return turns.join('\n') + '\n<start_of_turn>model\n';
     }
 
-    // 4. Mistral / Mixtral Instruct
     if (modelName.includes('mistral') || modelName.includes('mixtral')) {
       let systemPrefix = '';
       const turns: string[] = [];
@@ -242,7 +280,6 @@ export class LLMService {
       return turns.join(' ');
     }
 
-    // 5. Default: Llama-3 / Llama-3.1 / Llama-3.2
     return (
         '<|begin_of_text|>' +
         messages
@@ -272,12 +309,13 @@ export class LLMService {
     try {
       const normalizedModelPath = this.normalizeModelPath(modelPath);
       const normalizedMmproj = mmprojPath ? this.normalizeModelPath(mmprojPath) : undefined;
+      const resolvedCtx = config.nCtx ?? (normalizedMmproj ? 2048 : 4096);
 
       this.context = await initLlama(
           {
             model: normalizedModelPath,
             use_mlock: config.useMlock ?? false,
-            n_ctx: config.nCtx ?? (normalizedMmproj ? 2048 : 4096),
+            n_ctx: resolvedCtx,
             n_gpu_layers: config.nGpuLayers ?? 99,
             n_threads: config.nThreads ?? 4,
             n_batch: config.nBatch ?? (normalizedMmproj ? 256 : 512),
@@ -288,9 +326,6 @@ export class LLMService {
             onProgress(Math.max(0, Math.min(1, normalized)));
           }
       );
-
-      console.log('Is GPU Active:', this.context.gpu);
-      console.log('GPU Device Info:', this.context.devices);
 
       let isVisionActive = false;
       if (normalizedMmproj) {
@@ -303,7 +338,6 @@ export class LLMService {
 
           const isEnabled = await this.context.isMultimodalEnabled();
           isVisionActive = success !== false && isEnabled;
-          console.log('[LLMService] Multimodal Initialized:', isVisionActive);
         } catch (mmErr) {
           console.warn('[LLMService] Failed to initialize mmproj:', mmErr);
         }
@@ -312,14 +346,16 @@ export class LLMService {
       this.loadedModel = {
         name: modelName,
         path: normalizedModelPath,
+        nCtx: resolvedCtx,
         mmprojPath: normalizedMmproj,
         isVisionCapable: isVisionActive,
       };
       this.status = 'READY';
 
-      // Sync active model name & persistent node identity with native EdgeComputeWorkerService
+      // Sync active model, context window, vision capability & node identity with EdgeComputeWorkerService
       try {
         await ModelFile.setWorkerActiveModel(modelName);
+        await ModelFile.setWorkerModelCapabilities?.(modelName, resolvedCtx, isVisionActive);
         const identity = await MeshIdentityService.getInstance().getOrCreateIdentity();
         await ModelFile.setWorkerNodeIdentity?.(identity.node_id, identity.node_name);
       } catch {}
@@ -337,6 +373,339 @@ export class LLMService {
       return path;
     }
     return `file://${path}`;
+  }
+
+  /**
+   * Normalizes llama.rn or fallback JSON tool calls into strict OpenAI wire format:
+   * { id: "call_<hex8>", type: "function", function: { name, arguments: "<json-string>" } }
+   */
+  public static normalizeToolCalls(rawCalls: any[]): OpenAIToolCall[] {
+    if (!Array.isArray(rawCalls)) return [];
+    const out: OpenAIToolCall[] = [];
+    for (const tc of rawCalls) {
+      const fnName = tc?.function?.name || tc?.name || tc?.tool;
+      if (!fnName || typeof fnName !== 'string') continue;
+
+      const rawArgs = tc?.function?.arguments ?? tc?.arguments ?? tc?.parameters ?? {};
+      const serializedArgs =
+          typeof rawArgs === 'string' ? rawArgs : JSON.stringify(rawArgs ?? {});
+
+      out.push({
+        id: typeof tc?.id === 'string' && tc.id.length > 0 ? tc.id : LLMService.generateToolCallId(),
+        type: 'function',
+        function: {
+          name: fnName.trim(),
+          arguments: serializedArgs,
+        },
+      });
+    }
+    return out;
+  }
+
+  /**
+   * Fallback JSON tool-call extractor when a GGUF omits native Jinja tool templates
+   * or outputs raw {"tool": ..., "parameters": ...} / {"name": ..., "arguments": ...} JSON.
+   */
+  public static extractFallbackToolCalls(
+      text: string,
+      allowedTools?: OpenAIToolDefinition[]
+  ): OpenAIToolCall[] {
+    const trimmed = (text || '').trim();
+    if (!trimmed) return [];
+    const allowedNames = new Set(
+        (allowedTools || []).map((t) => t.function.name.toLowerCase())
+    );
+
+    const extracted: any[] = [];
+    let depth = 0;
+    let inString = false;
+    let escape = false;
+    let startIdx = -1;
+
+    for (let i = 0; i < trimmed.length; i++) {
+      const ch = trimmed[i];
+      if (escape) {
+        escape = false;
+        continue;
+      }
+      if (ch === '\\') {
+        escape = true;
+        continue;
+      }
+      if (ch === '"') {
+        inString = !inString;
+        continue;
+      }
+      if (!inString) {
+        if (ch === '{') {
+          if (depth === 0) startIdx = i;
+          depth++;
+        } else if (ch === '}') {
+          depth--;
+          if (depth === 0 && startIdx !== -1) {
+            const candidate = trimmed.slice(startIdx, i + 1);
+            try {
+              const obj = JSON.parse(candidate);
+              if (Array.isArray(obj?.tool_calls)) {
+                extracted.push(...obj.tool_calls);
+              } else {
+                const name = String(obj?.function?.name || obj?.name || obj?.tool || '').trim();
+                if (name && (allowedNames.size === 0 || allowedNames.has(name.toLowerCase()))) {
+                  extracted.push(obj);
+                }
+              }
+            } catch {}
+            startIdx = -1;
+          }
+        }
+      }
+    }
+
+    return LLMService.normalizeToolCalls(extracted);
+  }
+
+  /**
+   * MVP 4 OpenAI-Compatible Completion Engine (used by POST /v1/edge/chat & ToolOrchestrator).
+   * Attempts native llama.rn `jinja: true` + `tools` first inside try/catch; falls back safely
+   * to prompt-formatted execution + JSON tool extraction for GGUFs without Jinja tool metadata.
+   */
+  public async streamOpenAIChat(
+      options: OpenAIChatExecutionOptions,
+      callbacks: OpenAIChatStreamCallbacks = {}
+  ): Promise<OpenAIChatExecutionResult> {
+    if (!this.context) throw new Error('LLM Context is not initialized.');
+    if (this.status !== 'READY') throw new Error(`LLM is not ready (Status: ${this.status}).`);
+
+    this.status = 'GENERATING';
+    this.isInterrupted = false;
+
+    const startTime = performance.now();
+    let ttftRecorded = false;
+    let ttftMs = 0;
+    let tokenCount = 0;
+    let fullText = '';
+    let reasoningText = '';
+    let normalizedToolCalls: OpenAIToolCall[] = [];
+    let promptTokens = 0;
+    let completionTokens = 0;
+    let stoppedLimit = false;
+
+    const hasTools = Array.isArray(options.tools) && options.tools.length > 0;
+    const isRawToolPrefix = (txt: string): boolean => {
+      const t = txt.trimStart();
+      return t.startsWith('{') || t.startsWith('<|python_tag|>') || t.startsWith('<tool_call>');
+    };
+    const normalizedMessages = options.messages.map((m) => ({
+      ...m,
+      role: m.role === 'developer' ? 'system' : m.role,
+      content: m.content ?? '',
+    }));
+
+    const baseStop = options.stop ?? [
+      '<|eot_id|>',
+      '<|end_of_text|>',
+      '<|end|>',
+      '<|im_end|>',
+      '<|im_start|>',
+      '<|endoftext|>',
+      '<end_of_turn>',
+      '</s>',
+    ];
+
+    try {
+      // Primary Path: Native llama.rn minja + chat.cpp (`jinja: true` + OpenAI `tools`)
+      const nativeParams: Record<string, any> = {
+        messages: normalizedMessages,
+        jinja: true,
+        n_predict: options.max_tokens ?? 1024,
+        temperature: options.temperature ?? 0.2,
+        top_p: 0.9,
+        penalty_repeat: 1.12,
+        stop: baseStop,
+      };
+
+      if (hasTools) {
+        nativeParams.tools = options.tools;
+        if (options.tool_choice !== undefined) {
+          nativeParams.tool_choice = options.tool_choice;
+        }
+      }
+
+      if (options.response_format) {
+        if (options.response_format.type === 'json_object') {
+          nativeParams.response_format = { type: 'json_object' };
+        } else if (
+            options.response_format.type === 'json_schema' &&
+            options.response_format.json_schema?.schema
+        ) {
+          nativeParams.response_format = {
+            type: 'json_schema',
+            json_schema: options.response_format.json_schema,
+          };
+        }
+      }
+
+      let nativeSucceeded = false;
+      try {
+        const result: any = await this.context.completion(nativeParams as any, (data: any) => {
+          if (this.isInterrupted) return;
+          if (!ttftRecorded) {
+            ttftMs = performance.now() - startTime;
+            ttftRecorded = true;
+          }
+          tokenCount += 1;
+
+          const rChunk = typeof data?.reasoning_content === 'string' ? data.reasoning_content : '';
+          const tChunk = typeof data?.token === 'string' ? data.token : '';
+
+          if (rChunk) {
+            reasoningText += rChunk;
+            callbacks.onDelta?.({ reasoning_content: rChunk });
+          }
+
+          if (tChunk) {
+            fullText += tChunk;
+            // When tools are present, suppress raw JSON tool syntax until finalized if it starts with '{'
+            if (!hasTools || !isRawToolPrefix(fullText)) {
+              callbacks.onDelta?.({ content: tChunk });
+            }
+          }
+        });
+
+        nativeSucceeded = true;
+        if (typeof result?.content === 'string' && result.content.length > 0 && !fullText) {
+          fullText = result.content;
+        }
+        if (typeof result?.reasoning_content === 'string' && !reasoningText) {
+          reasoningText = result.reasoning_content;
+        }
+        if (Array.isArray(result?.tool_calls) && result.tool_calls.length > 0) {
+          normalizedToolCalls = LLMService.normalizeToolCalls(result.tool_calls);
+        }
+        promptTokens = result?.tokens_evaluated || Math.ceil(JSON.stringify(normalizedMessages).length / 3.8);
+        completionTokens = result?.tokens_predicted || tokenCount;
+        stoppedLimit = !!result?.stopped_limit;
+      } catch (jinjaErr) {
+        console.warn('[LLMService] Native jinja/tools completion failed; falling back to prompt template:', jinjaErr);
+      }
+
+      // Fallback Path: Standard template formatting + explicit tool schema injection
+      if (!nativeSucceeded) {
+        fullText = '';
+        reasoningText = '';
+        tokenCount = 0;
+
+        const flatMessages = normalizedMessages.map((m) => {
+          let contentStr =
+              typeof m.content === 'string' ? m.content : JSON.stringify(m.content ?? '');
+          if (m.role === 'assistant' && Array.isArray(m.tool_calls) && m.tool_calls.length > 0) {
+            contentStr = `${contentStr}\n${JSON.stringify({ tool_calls: m.tool_calls })}`.trim();
+          }
+          if (m.role === 'tool') {
+            contentStr = `[Tool Output (${m.name || 'tool'})]: ${contentStr}`;
+          }
+          return {
+            role: m.role === 'tool' ? 'user' : m.role,
+            content: contentStr,
+          };
+        });
+
+        if (hasTools) {
+          const toolBlock =
+              `You have access to these tools. To call a tool, respond ONLY with JSON: ` +
+              `{"name": "<tool_name>", "arguments": {<args>}}\n` +
+              `Available tools:\n${JSON.stringify(options.tools)}`;
+          if (flatMessages.length > 0 && flatMessages[0].role === 'system') {
+            flatMessages[0].content = `${flatMessages[0].content}\n\n${toolBlock}`;
+          } else {
+            flatMessages.unshift({ role: 'system', content: toolBlock });
+          }
+        }
+
+        const formattedPrompt = this.formatPromptForLoadedModel(flatMessages);
+        const fallbackRes: any = await this.context.completion(
+            {
+              prompt: formattedPrompt,
+              n_predict: options.max_tokens ?? 1024,
+              temperature: options.temperature ?? 0.2,
+              top_p: 0.9,
+              penalty_repeat: 1.15,
+              stop: baseStop,
+            } as any,
+            (data: any) => {
+              if (this.isInterrupted) return;
+              if (!ttftRecorded) {
+                ttftMs = performance.now() - startTime;
+                ttftRecorded = true;
+              }
+              tokenCount += 1;
+              if (data?.token) {
+                fullText += data.token;
+                if (!hasTools || !isRawToolPrefix(fullText)) {
+                  callbacks.onDelta?.({ content: data.token });
+                }
+              }
+            }
+        );
+
+        promptTokens =
+            fallbackRes?.tokens_evaluated || Math.ceil(formattedPrompt.length / 3.8);
+        completionTokens = fallbackRes?.tokens_predicted || tokenCount;
+        stoppedLimit = !!fallbackRes?.stopped_limit;
+      }
+
+      // If tools were requested and native tool_calls was empty, check JSON fallback extractor
+      if (hasTools && normalizedToolCalls.length === 0 && fullText.trim().length > 0) {
+        const extracted = LLMService.extractFallbackToolCalls(fullText, options.tools);
+        if (extracted.length > 0) {
+          normalizedToolCalls = extracted;
+          fullText = '';
+        } else if (isRawToolPrefix(fullText)) {
+          // It started with '{' (so we held streaming) but wasn't a tool call (e.g. json_object output)
+          callbacks.onDelta?.({ content: fullText });
+        }
+      }
+
+      if (normalizedToolCalls.length > 0) {
+        callbacks.onToolCalls?.(normalizedToolCalls);
+      }
+
+      const endTime = performance.now();
+      const generationTimeSec = Math.max((endTime - startTime) / 1000, 0.001);
+      const effectiveTokens = completionTokens || tokenCount;
+      const tokensPerSecond = parseFloat((effectiveTokens / generationTimeSec).toFixed(2));
+      const finishReason: 'stop' | 'tool_calls' | 'length' =
+          normalizedToolCalls.length > 0
+              ? 'tool_calls'
+              : stoppedLimit
+                  ? 'length'
+                  : 'stop';
+
+      const metrics: PerformanceMetrics = {
+        ttftMs: Math.round(ttftMs),
+        totalTokens: effectiveTokens,
+        promptTokens,
+        generationTimeSec: parseFloat(generationTimeSec.toFixed(2)),
+        tokensPerSecond,
+      };
+
+      this.status = 'READY';
+      return {
+        fullText,
+        reasoningText,
+        toolCalls: normalizedToolCalls,
+        finishReason,
+        usage: {
+          prompt_tokens: promptTokens,
+          completion_tokens: effectiveTokens,
+          total_tokens: promptTokens + effectiveTokens,
+        },
+        metrics,
+      };
+    } catch (error) {
+      this.status = 'READY';
+      throw error;
+    }
   }
 
   public async streamCompletion(
@@ -362,8 +731,7 @@ export class LLMService {
 
     let messagesPayload: ChatMessage[] | undefined = options.messages;
 
-    // Multimodal Vision Path (Qwen2-VL, SmolVLM, LLaVA):
-    // Unpack any pre-templated prompt into clean turns and attach image_url parts to the final user turn
+    // Multimodal Vision Path (Qwen2-VL, SmolVLM, LLaVA)
     if (!messagesPayload && options.imagePaths && options.imagePaths.length > 0) {
       const rawPrompt = options.prompt || 'Describe and analyze this image.';
       const unpacked =
@@ -384,7 +752,6 @@ export class LLMService {
       const lastUserIdx = unpacked.map((m) => m.role).lastIndexOf('user');
       messagesPayload = unpacked.map((m, idx) => {
         if (idx === lastUserIdx || (lastUserIdx === -1 && idx === unpacked.length - 1)) {
-          // Place image_url parts before text (standard Qwen2-VL & SmolVLM multimodal order)
           const cleanText = m.content
               .replace(/<\|vision_start\|>[\s\S]*?<\|vision_end\|>/g, '')
               .replace(/<\|image_pad\|>/g, '')
@@ -448,7 +815,7 @@ export class LLMService {
         completionConfig.prompt = rawPrompt;
       }
 
-      const result = await this.context.completion(
+      const result: any = await this.context.completion(
           completionConfig as any,
           (data) => {
             if (this.isInterrupted) return;
@@ -470,6 +837,7 @@ export class LLMService {
       const metrics: PerformanceMetrics = {
         ttftMs: Math.round(ttftMs),
         totalTokens: effectiveTokens,
+        promptTokens: result.tokens_evaluated,
         generationTimeSec: parseFloat(generationTimeSec.toFixed(2)),
         tokensPerSecond,
       };
@@ -581,6 +949,7 @@ export class LLMService {
       this.context = null;
       this.loadedModel = null;
       this.status = 'UNLOADED';
+      ModelFile.setWorkerModelCapabilities?.('No Model Loaded', 4096, false).catch(() => {});
     }
   }
 }

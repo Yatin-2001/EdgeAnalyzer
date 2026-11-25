@@ -1,6 +1,6 @@
-import { LLMService, PerformanceMetrics, StreamCallbacks } from './LLMService';
+import { LLMService, PerformanceMetrics, StreamCallbacks, ChatMessage } from './LLMService';
 import { ToolRegistry } from '../tools/ToolRegistry';
-import { ToolCallPayload, ToolResult } from '../tools/types';
+import { OpenAIToolCall, ToolCallPayload, ToolResult } from '../tools/types';
 import { MeshClientService } from './MeshClientService';
 import { TelemetryService, TraceContext } from './TelemetryService';
 
@@ -84,6 +84,231 @@ export class ToolOrchestrator {
             `Output: {"tool": "web_search", "parameters": {"query": "video title from image"}}\n\n` +
             `When tool output is provided, synthesize your response directly in plain language without further JSON.`
         );
+    }
+
+    /**
+     * Converts a pre-templated prompt into clean OpenAI ChatMessage[] for native llama.rn tool calling,
+     * stripping the legacy text tool instructions block so native `tools[]` schemas are not duplicated.
+     */
+    private buildNativeToolMessages(initialPrompt: string): ChatMessage[] {
+        const unpacked = this.llm.unpackTemplatedPrompt(initialPrompt);
+        return unpacked.map((m) => {
+            let content = m.content;
+            if (m.role === 'system') {
+                const legacyIdx = content.indexOf('### AVAILABLE TOOLS:');
+                if (legacyIdx !== -1) {
+                    content = content.slice(0, legacyIdx).trim();
+                }
+            }
+            return {
+                role: (m.role === 'system' || m.role === 'assistant' ? m.role : 'user') as
+                    | 'system'
+                    | 'user'
+                    | 'assistant',
+                content,
+            };
+        });
+    }
+
+    /**
+     * MVP 4 Local OpenAI Tool-Calling Loop (Native `result.toolCalls` + Legacy JSON Fallback)
+     */
+    private async executeLocalOpenAIToolLoop(
+        initialPrompt: string,
+        rawUserQuery: string,
+        callbacks: OrchestrationCallbacks,
+        traceContext: TraceContext,
+        rootSpanId: string
+    ): Promise<{ fullText: string; metrics: PerformanceMetrics }> {
+        const openAITools = this.registry.getOpenAIToolDefinitions();
+        const messages: ChatMessage[] = this.buildNativeToolMessages(initialPrompt);
+        const loadedModel = this.llm.getLoadedModel()?.name || 'local_gguf';
+
+        let cumulativeTokens = 0;
+        let cumulativeTimeSec = 0;
+        let initialTtftMs = 0;
+        let finalText = '';
+        const executedSignatures = new Set<string>();
+
+        for (let step = 1; step <= ToolOrchestrator.MAX_TOOL_STEPS; step++) {
+            const allowTools = step < ToolOrchestrator.MAX_TOOL_STEPS;
+            const localSpan = this.telemetry.startSpan({
+                traceId: traceContext.trace_id,
+                sessionId: traceContext.session_id,
+                parentSpanId: rootSpanId,
+                name: `local.generation_turn_${step}`,
+                observationType: 'generation',
+                targetDevice: 'local_snapdragon',
+                attributes: {
+                    'gen_ai.system': 'llama.rn',
+                    'gen_ai.request.model': loadedModel,
+                    'hardware.backend': 'OpenCL_Adreno',
+                    'hardware.threads': 4,
+                    'tool.native_openai_mode': true,
+                },
+            });
+
+            let stepResult;
+            try {
+                stepResult = await this.llm.streamOpenAIChat(
+                    {
+                        messages,
+                        tools: allowTools ? openAITools : undefined,
+                        tool_choice: allowTools ? 'auto' : undefined,
+                        max_tokens: 512,
+                        temperature: 0.2,
+                    },
+                    {
+                        onDelta: (delta) => {
+                            if (delta.content) {
+                                callbacks.onToken(delta.content);
+                            }
+                        },
+                    }
+                );
+
+                await this.telemetry.endSpan(localSpan, {
+                    status: 'OK',
+                    ttftMs: stepResult.metrics.ttftMs,
+                    promptTokens: stepResult.usage.prompt_tokens,
+                    completionTokens: stepResult.usage.completion_tokens,
+                    tokPerSec: stepResult.metrics.tokensPerSecond,
+                    extraAttributes: {
+                        'gen_ai.prompt': JSON.stringify(messages).substring(0, 4000),
+                        'gen_ai.completion':
+                            stepResult.fullText || JSON.stringify(stepResult.toolCalls),
+                    },
+                });
+            } catch (err: any) {
+                await this.telemetry.endSpan(localSpan, {
+                    status: 'ERROR',
+                    errorMessage: err?.message || String(err),
+                });
+                throw err;
+            }
+
+            cumulativeTokens += stepResult.metrics.totalTokens;
+            cumulativeTimeSec += stepResult.metrics.generationTimeSec;
+            if (initialTtftMs === 0) initialTtftMs = stepResult.metrics.ttftMs;
+
+            // Primary: Read native structured `toolCalls` directly from llama.rn
+            let activeToolCalls: OpenAIToolCall[] = allowTools ? [...stepResult.toolCalls] : [];
+
+            // Strict Fallback: Legacy JSON parser only when `toolCalls` is empty
+            if (allowTools && activeToolCalls.length === 0 && stepResult.fullText.trim().length > 0) {
+                const legacyParsed = this.parseAndNormalizeToolCall(stepResult.fullText);
+                if (legacyParsed) {
+                    activeToolCalls = [
+                        {
+                            id: LLMService.generateToolCallId(),
+                            type: 'function',
+                            function: {
+                                name: legacyParsed.tool,
+                                arguments: JSON.stringify(legacyParsed.parameters || {}),
+                            },
+                        },
+                    ];
+                }
+            }
+
+            // Deduplicate identical tool calls across iterations
+            activeToolCalls = activeToolCalls.filter((tc) => {
+                const sig = `${tc.function.name}:${tc.function.arguments}`;
+                return !executedSignatures.has(sig);
+            });
+
+            if (activeToolCalls.length === 0) {
+                finalText = stepResult.fullText;
+                break;
+            }
+
+            // Append assistant message carrying structured `tool_calls`
+            messages.push({
+                role: 'assistant',
+                content: stepResult.fullText || null,
+                tool_calls: activeToolCalls,
+            });
+
+            // Execute each requested tool locally and append `{ role: 'tool', tool_call_id, name, content }`
+            for (const tc of activeToolCalls) {
+                const sig = `${tc.function.name}:${tc.function.arguments}`;
+                executedSignatures.add(sig);
+
+                let parsedArgs: Record<string, any> = {};
+                try {
+                    const obj = JSON.parse(tc.function.arguments || '{}');
+                    if (obj && typeof obj === 'object') parsedArgs = obj;
+                } catch {}
+
+                const normalizedCall = this.normalizeToolNameAndParams(tc.function.name, parsedArgs);
+                callbacks.onToolCallDetected?.(normalizedCall.tool, normalizedCall.parameters, step);
+
+                const toolSpan = this.telemetry.startSpan({
+                    traceId: traceContext.trace_id,
+                    sessionId: traceContext.session_id,
+                    parentSpanId: rootSpanId,
+                    name: `client.tool_exec:${normalizedCall.tool}`,
+                    observationType: 'tool',
+                    targetDevice: 'local_snapdragon',
+                    attributes: {
+                        'tool.name': normalizedCall.tool,
+                        'tool.call_id': tc.id,
+                        'tool.iteration_step': `${step} of ${ToolOrchestrator.MAX_TOOL_STEPS}`,
+                        'tool.args': JSON.stringify(normalizedCall.parameters),
+                        'tool.cache_hit': false,
+                    },
+                });
+
+                const executor = this.registry.get(normalizedCall.tool);
+                const toolResult: ToolResult = executor
+                    ? await executor.execute(normalizedCall.parameters)
+                    : {
+                        success: false,
+                        error: `Tool "${normalizedCall.tool}" is not available.`,
+                        executionTimeMs: 0,
+                    };
+
+                const rawDataString = JSON.stringify(toolResult.data || { error: toolResult.error });
+                const clampedData =
+                    rawDataString.length > 900
+                        ? `${rawDataString.substring(0, 900)}...}`
+                        : rawDataString;
+
+                await this.telemetry.endSpan(toolSpan, {
+                    status: toolResult.success ? 'OK' : 'ERROR',
+                    errorMessage: toolResult.error || null,
+                    extraAttributes: {
+                        'tool.duration_ms': toolResult.executionTimeMs,
+                        'tool.output': clampedData.substring(0, 300),
+                    },
+                });
+
+                callbacks.onToolExecutionCompleted?.(normalizedCall.tool, toolResult, step);
+
+                messages.push({
+                    role: 'tool',
+                    tool_call_id: tc.id,
+                    name: normalizedCall.tool,
+                    content: clampedData,
+                });
+            }
+        }
+
+        const aggregateMetrics: PerformanceMetrics = {
+            ttftMs: initialTtftMs || 45,
+            totalTokens: cumulativeTokens,
+            generationTimeSec: parseFloat(Math.max(cumulativeTimeSec, 0.01).toFixed(2)),
+            tokensPerSecond:
+                cumulativeTimeSec > 0
+                    ? parseFloat((cumulativeTokens / cumulativeTimeSec).toFixed(1))
+                    : 0,
+        };
+
+        callbacks.onMetrics?.(aggregateMetrics);
+        return {
+            fullText: finalText,
+            metrics: aggregateMetrics,
+        };
     }
 
     private async dispatchGeneration(
@@ -258,6 +483,9 @@ export class ToolOrchestrator {
         options: AgentLoopOptions = {}
     ): Promise<{ fullText: string; metrics: PerformanceMetrics }> {
         const target = this.mesh.getSelectedTarget();
+        const isRemote = target.nodeId !== 'local_engine';
+        const hasImages = !!options.imagePaths && options.imagePaths.length > 0;
+
         const traceContext =
             options.traceContext ||
             (await this.telemetry.createTurnTraceContext(
@@ -278,23 +506,43 @@ export class ToolOrchestrator {
             },
         });
 
-        let currentPrompt = initialPrompt;
-        let cumulativeTokens = 0;
-        let cumulativeTimeSec = 0;
-        let initialTtftMs = 0;
-        let stepCount = 0;
-        let activeDesktopTaskId: string | undefined;
-
-        const executedCalls = new Set<string>();
-
         try {
+            // Use native OpenAI tool_calls loop for local text inference
+            if (!isRemote && !hasImages) {
+                const res = await this.executeLocalOpenAIToolLoop(
+                    initialPrompt,
+                    rawUserQuery,
+                    callbacks,
+                    traceContext,
+                    rootTurnSpan.spanId
+                );
+
+                await this.telemetry.endSpan(rootTurnSpan, {
+                    status: 'OK',
+                    ttftMs: res.metrics.ttftMs,
+                    completionTokens: res.metrics.totalTokens,
+                    tokPerSec: res.metrics.tokensPerSecond,
+                    extraAttributes: { 'user.final_output': res.fullText },
+                });
+
+                return res;
+            }
+
+            // Remote Mesh (Desktop Priority-2 AWAITING_TOOL Suspend/Resume) & Local Vision Path
+            let currentPrompt = initialPrompt;
+            let cumulativeTokens = 0;
+            let cumulativeTimeSec = 0;
+            let initialTtftMs = 0;
+            let stepCount = 0;
+            let activeDesktopTaskId: string | undefined;
+
+            const executedCalls = new Set<string>();
+
             while (stepCount < ToolOrchestrator.MAX_TOOL_STEPS) {
                 stepCount++;
 
-                const isFirstTurnWithImage =
-                    stepCount === 1 && !!options.imagePaths && options.imagePaths.length > 0;
+                const isFirstTurnWithImage = stepCount === 1 && hasImages;
 
-                // Step 2+: Priority-2 Tool Resumption (Synthesize final answer directly to user)
                 if (stepCount > 1) {
                     const finalGen = await this.dispatchGeneration(
                         currentPrompt,
@@ -305,7 +553,7 @@ export class ToolOrchestrator {
                             parentSpanId: rootTurnSpan.spanId,
                             stepNumber: stepCount,
                             taskId: activeDesktopTaskId,
-                            priority: 2, // High priority so interrupted tool-calling agents resume first!
+                            priority: 2,
                             onQueueStatusChange: callbacks.onQueueStatusChange,
                         }
                     );
@@ -328,7 +576,7 @@ export class ToolOrchestrator {
                         ttftMs: aggregateMetrics.ttftMs,
                         completionTokens: cumulativeTokens,
                         tokPerSec: aggregateMetrics.tokensPerSecond,
-                        extraAttributes: { 'user.final_output': finalGen.text }
+                        extraAttributes: { 'user.final_output': finalGen.text },
                     });
 
                     callbacks.onMetrics?.(aggregateMetrics);
@@ -338,7 +586,6 @@ export class ToolOrchestrator {
                     };
                 }
 
-                // Step 1: Query the model silently to detect if a tool is required
                 const stepGen = await this.dispatchGeneration(currentPrompt, undefined, {
                     maxTokens: 160,
                     imagePaths: isFirstTurnWithImage ? options.imagePaths : undefined,
@@ -365,7 +612,6 @@ export class ToolOrchestrator {
                     ? `${toolCall.tool}:${JSON.stringify(toolCall.parameters)}`
                     : '';
 
-                // If no tool is required, stream the response
                 if (!toolCall || executedCalls.has(callSignature)) {
                     const finalGen = await this.dispatchGeneration(
                         currentPrompt,
@@ -398,7 +644,7 @@ export class ToolOrchestrator {
                         ttftMs: aggregateMetrics.ttftMs,
                         completionTokens: cumulativeTokens,
                         tokPerSec: aggregateMetrics.tokensPerSecond,
-                        extraAttributes: { 'user.final_output': finalGen.text }
+                        extraAttributes: { 'user.final_output': finalGen.text },
                     });
 
                     callbacks.onMetrics?.(aggregateMetrics);
@@ -408,7 +654,6 @@ export class ToolOrchestrator {
                     };
                 }
 
-                // Tool call identified: Execute locally on this device & record Tool Span
                 executedCalls.add(callSignature);
                 callbacks.onToolCallDetected?.(toolCall.tool, toolCall.parameters, stepCount);
 
@@ -428,17 +673,13 @@ export class ToolOrchestrator {
                 });
 
                 const executor = this.registry.get(toolCall.tool);
-                let toolResult: ToolResult;
-
-                if (!executor) {
-                    toolResult = {
+                const toolResult: ToolResult = executor
+                    ? await executor.execute(toolCall.parameters || {})
+                    : {
                         success: false,
                         error: `Tool "${toolCall.tool}" is not available.`,
                         executionTimeMs: 0,
                     };
-                } else {
-                    toolResult = await executor.execute(toolCall.parameters || {});
-                }
 
                 const rawDataString = JSON.stringify(toolResult.data || { error: toolResult.error });
                 const clampedData =
@@ -458,7 +699,6 @@ export class ToolOrchestrator {
                 callbacks.onToolExecutionCompleted?.(toolCall.tool, toolResult, stepCount);
 
                 const isChatML = currentPrompt.includes('<|im_start|>');
-
                 if (isChatML) {
                     currentPrompt +=
                         `<|im_start|>assistant\n` +
@@ -492,7 +732,7 @@ export class ToolOrchestrator {
                 status: 'OK',
                 ttftMs: initialTtftMs || 45,
                 completionTokens: cumulativeTokens + finalFallback.tokenCount,
-                extraAttributes: { 'user.final_output': finalFallback.text }
+                extraAttributes: { 'user.final_output': finalFallback.text },
             });
 
             return {
@@ -518,6 +758,53 @@ export class ToolOrchestrator {
             });
             throw err;
         }
+    }
+
+    private normalizeToolNameAndParams(
+        rawNameInput: string,
+        rawParamsInput: Record<string, any>
+    ): ToolCallPayload {
+        let rawName = rawNameInput.trim().toLowerCase();
+        let rawParams = rawParamsInput || {};
+
+        if (rawName.includes('calc') || rawName.includes('math')) {
+            rawName = 'calculator';
+            if (!rawParams.expression) {
+                rawParams = {
+                    expression:
+                        rawParams.num ||
+                        rawParams.expr ||
+                        rawParams.formula ||
+                        rawParams.query ||
+                        rawParams.math ||
+                        String(Object.values(rawParams)[0] || ''),
+                };
+            }
+        } else if (
+            rawName === 'exchange_rate' ||
+            rawName === 'search' ||
+            rawName === 'google' ||
+            rawName === 'youtube' ||
+            rawName === 'finance'
+        ) {
+            rawName = 'web_search';
+            if (!rawParams.query) {
+                rawParams = {
+                    query: rawParams.reason || rawParams.expression || rawParams.channel || 'information',
+                };
+            }
+        } else if (rawName.includes('locat') || rawName.includes('gps')) {
+            rawName = 'device_location';
+        } else if (rawName.includes('weather') || rawName.includes('temp')) {
+            rawName = 'weather';
+            if (!rawParams.location) {
+                rawParams = {
+                    location: rawParams.city || rawParams.place || rawParams.query || 'current_location',
+                };
+            }
+        }
+
+        return { tool: rawName, parameters: rawParams };
     }
 
     private detectFallbackIntent(query: string): ToolCallPayload | null {
@@ -569,51 +856,18 @@ export class ToolOrchestrator {
         for (const obj of objects) {
             if (typeof obj !== 'object' || obj === null) continue;
 
-            let rawName = (obj.tool || obj.name || '').trim().toLowerCase();
-            let rawParams = typeof obj.parameters === 'object' && obj.parameters !== null ? obj.parameters : {};
+            const rawName = (obj.tool || obj.name || obj.function?.name || '').trim();
+            const rawParams =
+                typeof obj.parameters === 'object' && obj.parameters !== null
+                    ? obj.parameters
+                    : typeof obj.arguments === 'object' && obj.arguments !== null
+                        ? obj.arguments
+                        : {};
 
             if (!rawName) continue;
-
-            if (rawName.includes('calc') || rawName.includes('math')) {
-                rawName = 'calculator';
-                if (!rawParams.expression) {
-                    rawParams = {
-                        expression:
-                            rawParams.num ||
-                            rawParams.expr ||
-                            rawParams.formula ||
-                            rawParams.query ||
-                            rawParams.math ||
-                            String(Object.values(rawParams)[0] || ''),
-                    };
-                }
-            } else if (
-                rawName === 'exchange_rate' ||
-                rawName === 'search' ||
-                rawName === 'google' ||
-                rawName === 'youtube' ||
-                rawName === 'finance'
-            ) {
-                rawName = 'web_search';
-                if (!rawParams.query) {
-                    rawParams = { query: rawParams.reason || rawParams.expression || rawParams.channel || 'information' };
-                }
-            } else if (rawName.includes('locat') || rawName.includes('gps')) {
-                rawName = 'device_location';
-            } else if (rawName.includes('weather') || rawName.includes('temp')) {
-                rawName = 'weather';
-                if (!rawParams.location) {
-                    rawParams = {
-                        location: rawParams.city || rawParams.place || rawParams.query || 'current_location',
-                    };
-                }
-            }
-
-            if (this.registry.get(rawName)) {
-                return {
-                    tool: rawName,
-                    parameters: rawParams,
-                };
+            const normalized = this.normalizeToolNameAndParams(rawName, rawParams);
+            if (this.registry.get(normalized.tool)) {
+                return normalized;
             }
         }
 

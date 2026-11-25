@@ -23,11 +23,22 @@ interface ModelFileModule {
   startWorkerService(): Promise<boolean>;
   stopWorkerService(): Promise<boolean>;
   setWorkerActiveModel(modelName: string): Promise<boolean>;
+  setWorkerModelCapabilities?(
+      modelName: string,
+      nCtx: number,
+      supportsVision: boolean,
+  ): Promise<boolean>;
+  setWorkerInstalledModels?(modelsJson: string): Promise<boolean>;
   setWorkerNodeIdentity?(nodeId: string, nodeName: string): Promise<boolean>;
   getLocalIpAddress?(): Promise<string>;
 
-  // Token Streaming Bridge from React Native to Native HTTP Server
+  // Token & Typed SSE Streaming Bridge from React Native to Native HTTP Server
   pushWorkerToken(requestId: string, token: string): Promise<boolean>;
+  pushWorkerSseEvent?(
+      requestId: string,
+      eventName: string,
+      jsonData: string,
+  ): Promise<boolean>;
   finishWorkerInference(requestId: string): Promise<boolean>;
 
   // Expo Native Event Subscription
