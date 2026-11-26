@@ -20,6 +20,7 @@ import {
 interface Props {
     onBack: () => void;
     initialSessionId?: string | null;
+    initialTraceId?: string | null;
 }
 
 interface TraceTurnGroup {
@@ -71,7 +72,7 @@ function getSpanBarColor(span: TelemetrySpanRecord): string {
     return '#06B6D4';
 }
 
-export const TelemetryInspectorScreen: React.FC<Props> = ({ onBack, initialSessionId = null }) => {
+export const TelemetryInspectorScreen: React.FC<Props> = ({ onBack, initialSessionId = null, initialTraceId = null, }) => {
     const insets = useSafeAreaInsets();
     const telemetry = TelemetryService.getInstance();
 
@@ -91,6 +92,12 @@ export const TelemetryInspectorScreen: React.FC<Props> = ({ onBack, initialSessi
     const [turns, setTurns] = useState<TraceTurnGroup[]>([]);
     const [isLoadingTurns, setIsLoadingTurns] = useState(false);
     const [expandedSpanIds, setExpandedSpanIds] = useState<Record<string, boolean>>({});
+
+    const [activeTraceFilter, setActiveTraceFilter] = useState<string | null>(initialTraceId);
+
+    useEffect(() => {
+        setActiveTraceFilter(initialTraceId);
+    }, [initialTraceId]);
 
     const loadSessions = useCallback(async () => {
         try {
@@ -248,6 +255,10 @@ export const TelemetryInspectorScreen: React.FC<Props> = ({ onBack, initialSessi
         return s.source === filter;
     });
 
+    const displayedTurns = activeTraceFilter
+        ? turns.filter((t) => t.traceId === activeTraceFilter)
+        : turns;
+
     const renderSpanSubline = (span: TelemetrySpanRecord): string => {
         try {
             const attrs = JSON.parse(span.attributes_json || '{}');
@@ -387,6 +398,17 @@ export const TelemetryInspectorScreen: React.FC<Props> = ({ onBack, initialSessi
                 <Text style={styles.syncStripHint}>Tap span to inspect</Text>
             </View>
 
+            {activeTraceFilter && (
+                <View style={styles.traceFilterBar}>
+                    <Text style={styles.traceFilterText} numberOfLines={1}>
+                        🔍 Trace Filter: {activeTraceFilter}
+                    </Text>
+                    <TouchableOpacity onPress={() => setActiveTraceFilter(null)}>
+                        <Text style={styles.traceFilterClear}>Clear</Text>
+                    </TouchableOpacity>
+                </View>
+            )}
+
             {/* LEVEL 1: Multi-Conversation Sessions List */}
             {!selectedSession ? (
                 <View style={styles.body}>
@@ -523,13 +545,18 @@ export const TelemetryInspectorScreen: React.FC<Props> = ({ onBack, initialSessi
                                 </View>
                             </View>
 
-                            {turns.length === 0 ? (
-                                <View style={styles.centerEmpty}>
-                                    <Text style={styles.emptyTitle}>No Spans Found</Text>
-                                </View>
+                            {displayedTurns.length === 0 ? (
+                                    <View style={styles.centerEmpty}>
+                                        <Text style={styles.emptyTitle}>No Matching Spans Found</Text>
+                                        {activeTraceFilter && (
+                                            <Text style={styles.emptyDesc}>
+                                                Trace {activeTraceFilter.substring(0, 14)} has no spans in local mobile SQLite (agent gateway spans live on Desktop / Langfuse).
+                                            </Text>
+                                        )}
+                                    </View>
                             ) : (
-                                turns.map((turn, turnIndex) => {
-                                    const turnNumber = turns.length - turnIndex;
+                                displayedTurns.map((turn, turnIndex) => {
+                                    const turnNumber = displayedTurns.length - turnIndex;
                                     return (
                                         <View key={turn.traceId} style={styles.turnCard}>
                                             {/* Turn Header */}
@@ -1030,5 +1057,31 @@ const styles = StyleSheet.create({
         fontSize: 10,
         fontFamily: 'monospace',
         flex: 1,
+    },
+    traceFilterBar: {
+        flexDirection: 'row',
+        alignItems: 'center',
+        justifyContent: 'space-between',
+        backgroundColor: '#0284C720',
+        borderBottomWidth: 1,
+        borderBottomColor: '#38BDF840',
+        paddingHorizontal: 14,
+        paddingVertical: 7,
+        gap: 10,
+    },
+    traceFilterText: {
+        color: '#38BDF8',
+        fontSize: 11,
+        fontFamily: 'monospace',
+        flex: 1,
+    },
+    traceFilterClear: {
+        color: '#F8FAFC',
+        fontSize: 11,
+        fontWeight: '700',
+        backgroundColor: '#334155',
+        paddingHorizontal: 8,
+        paddingVertical: 3,
+        borderRadius: 6,
     },
 });

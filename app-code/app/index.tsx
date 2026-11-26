@@ -45,6 +45,9 @@ import { StudioScreen } from '@/src/screens/StudioScreen';
 import { MindspaceHomeScreen } from '@/src/screens/mindspace/MindspaceHomeScreen';
 import { NotebookDetailScreen } from '@/src/screens/mindspace/NotebookDetailScreen';
 import { TelemetryInspectorScreen } from '@/src/screens/TelemetryInspectorScreen';
+import { AgentsHubScreen } from '@/src/screens/agents/AgentsHubScreen';
+import { AgentRunScreen } from '@/src/screens/agents/AgentRunScreen';
+import type { AgentRunDTO, RegisteredAgentDTO } from '@/src/types/agentTypes';
 
 import { AdvisorWorkspaceScreen } from '@/src/screens/advisor/AdvisorWorkspaceScreen';
 import { ContactDetailScreen } from '@/src/screens/advisor/ContactDetailScreen';
@@ -57,7 +60,6 @@ import ModelFile from '@/modules/model-file/src/ModelFileModule';
 import { TelemetryService } from '@/src/services/TelemetryService';
 
 export default function ChatScreen() {
-  const [activeTab, setActiveTab] = useState<'chat' | 'studio' | 'mindspace' | 'advisor' | 'telemetry'>('chat');
   const [conversations, setConversations] = useState<ConversationRecord[]>([]);
   const [activeConv, setActiveConv] = useState<ConversationRecord | null>(null);
   const [messages, setMessages] = useState<MessageRecord[]>([]);
@@ -77,6 +79,14 @@ export default function ChatScreen() {
 
   const [selectedAdvisorContactId, setSelectedAdvisorContactId] = useState<string | null>(null);
   const [isAdvisorWorkspaceOpen, setIsAdvisorWorkspaceOpen] = useState(false);
+  const [activeTab, setActiveTab] = useState<
+      'chat' | 'studio' | 'mindspace' | 'advisor' | 'telemetry' | 'agents'
+  >('chat');
+
+  const [selectedAgentForRun, setSelectedAgentForRun] = useState<RegisteredAgentDTO | null>(null);
+  const [selectedAgentRun, setSelectedAgentRun] = useState<AgentRunDTO | null>(null);
+  const [telemetryFilterTraceId, setTelemetryFilterTraceId] = useState<string | null>(null);
+  const [telemetryFilterSessionId, setTelemetryFilterSessionId] = useState<string | null>(null);
 
   const insets = useSafeAreaInsets();
   const llm = useRef(LLMService.getInstance()).current;
@@ -648,11 +658,62 @@ export default function ChatScreen() {
     );
   }
 
+  // Agents Control Plane Routing (MVP 4)
+  if (activeTab === 'agents') {
+    return (
+        <View
+            style={{
+              flex: 1,
+              backgroundColor: '#0F172A',
+              paddingTop: insets.top,
+              paddingBottom: insets.bottom,
+            }}
+        >
+          <StatusBar barStyle="light-content" backgroundColor="#0F172A" />
+          {selectedAgentForRun || selectedAgentRun ? (
+              <AgentRunScreen
+                  agent={selectedAgentForRun ?? undefined}
+                  initialRun={selectedAgentRun ?? undefined}
+                  onBack={() => {
+                    setSelectedAgentForRun(null);
+                    setSelectedAgentRun(null);
+                  }}
+                  onInspectTrace={(traceId) => {
+                    setTelemetryFilterTraceId(traceId);
+                    setTelemetryFilterSessionId(selectedAgentRun?.sessionId ?? null);
+                    setSelectedAgentForRun(null);
+                    setSelectedAgentRun(null);
+                    setActiveTab('telemetry');
+                  }}
+              />
+          ) : (
+              <AgentsHubScreen
+                  onBack={() => setActiveTab('chat')}
+                  onSelectAgentToLaunch={(agent) => {
+                    setSelectedAgentRun(null);
+                    setSelectedAgentForRun(agent);
+                  }}
+                  onOpenRun={(run, agent) => {
+                    setSelectedAgentForRun(agent ?? null);
+                    setSelectedAgentRun(run);
+                  }}
+              />
+          )}
+        </View>
+    );
+  }
+
   // Telemetry Inspector Screen Routing
   if (activeTab === 'telemetry') {
     return (
         <TelemetryInspectorScreen
-            onBack={() => setActiveTab('chat')}
+            initialSessionId={telemetryFilterSessionId}
+            initialTraceId={telemetryFilterTraceId}
+            onBack={() => {
+              setTelemetryFilterTraceId(null);
+              setTelemetryFilterSessionId(null);
+              setActiveTab('chat');
+            }}
         />
     );
   }
@@ -790,6 +851,10 @@ export default function ChatScreen() {
             searchProvider={searchProvider}
             onSelectTab={(tab) => {
               setActiveNotebookId(null);
+              setSelectedAgentForRun(null);
+              setSelectedAgentRun(null);
+              setTelemetryFilterTraceId(null);
+              setTelemetryFilterSessionId(null);
               setActiveTab(tab);
             }}
             onSelect={switchConversation}

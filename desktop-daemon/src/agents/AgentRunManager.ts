@@ -597,26 +597,45 @@ export class AgentRunManager extends EventEmitter {
     }
 
     private async failRunAndKill(runId: string, reason: string): Promise<void> {
+        this.finalizeRun(runId, 'FAILED', reason);
         const active = this.activeRuns.get(runId);
         if (active) {
             clearTimeout(active.timeoutTimer);
             this.tokenRegistry.revokeRunToken(active.runToken);
-            await killProcessTree(active.child.pid);
             this.activeRuns.delete(runId);
+            await killProcessTree(active.child.pid);
         }
-        this.finalizeRun(runId, 'FAILED', reason);
     }
 
-    public listRuns(limit = 30): AgentRunDTO[] {
+    public listRuns(
+        limit = 30,
+        filters?: { agentId?: string | undefined; status?: string | undefined }
+    ): AgentRunDTO[] {
+        const clauses: string[] = [];
+        const params: Array<string | number> = [];
+
+        if (filters?.agentId) {
+            clauses.push('r.agent_id = ?');
+            params.push(filters.agentId);
+        }
+        if (filters?.status) {
+            clauses.push('r.status = ?');
+            params.push(filters.status);
+        }
+
+        const whereSql = clauses.length > 0 ? `WHERE ${clauses.join(' AND ')}` : '';
+        params.push(limit);
+
         const rows = this.db
             .prepare(`
                 SELECT r.*, a.name AS agent_name
                 FROM agent_runs r
                 LEFT JOIN registered_agents a ON a.agent_id = r.agent_id
+                ${whereSql}
                 ORDER BY r.started_at_ms DESC
                 LIMIT ?
             `)
-            .all(limit) as unknown as Array<AgentRunRecord & { agent_name?: string | null }>;
+            .all(...params) as unknown as Array<AgentRunRecord & { agent_name?: string | null }>;
 
         return rows.map((r) => this.toRunDTO(r));
     }

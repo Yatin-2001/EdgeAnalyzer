@@ -14,6 +14,12 @@ import {
     RemoteDesktopTaskSpans,
 } from './TelemetryService';
 import ModelFile from '../../modules/model-file/src/ModelFileModule';
+import type {
+    AgentRunDTO,
+    AgentRunEventDTO,
+    AgentWsNotification,
+    RegisteredAgentDTO,
+} from '../types/agentTypes';
 
 export interface MeshNodeEndpoint {
     nodeId: string;
@@ -72,6 +78,16 @@ export class MeshClientService {
     };
 
     private listeners = new Set<() => void>();
+
+    private agentEventListeners = new Set<(event: AgentWsNotification) => void>();
+    private pendingAgentRpcs = new Map<
+        string,
+        {
+            resolve: (val: any) => void;
+            reject: (err: Error) => void;
+            timer: ReturnType<typeof setTimeout>;
+        }
+    >();
 
     private constructor() {
         // Register outbox batch sync transport with TelemetryService
@@ -450,10 +466,17 @@ export class MeshClientService {
     }
 
     private ensurePersistentConnection(): void {
-        const targetNode =
+        const selectedNode =
             this.selectedTarget.nodeId !== 'local_engine'
                 ? this.activeNodes.get(this.selectedTarget.nodeId)
-                : Array.from(this.activeNodes.values()).find((n) => n.deviceTier === 'thick_desktop' && n.isOnline);
+                : undefined;
+
+        const targetNode =
+            selectedNode && selectedNode.isOnline && selectedNode.deviceTier === 'thick_desktop'
+                ? selectedNode
+                : Array.from(this.activeNodes.values()).find(
+                    (n) => n.deviceTier === 'thick_desktop' && n.isOnline
+                );
 
         if (!targetNode || !targetNode.isOnline || targetNode.deviceTier !== 'thick_desktop') {
             this.teardownPersistentWs();
@@ -481,6 +504,38 @@ export class MeshClientService {
             ws.onmessage = async (event) => {
                 try {
                     const msg = JSON.parse(event.data.toString());
+
+                    // Resolve pending agent.* JSON-RPC responses
+                    if (msg.id && this.pendingAgentRpcs.has(String(msg.id))) {
+                        const pending = this.pendingAgentRpcs.get(String(msg.id))!;
+                        this.pendingAgentRpcs.delete(String(msg.id));
+                        clearTimeout(pending.timer);
+                        if (msg.error) {
+                            pending.reject(new Error(msg.error.message || 'Agent RPC failed'));
+                        } else {
+                            pending.resolve(msg.result);
+                        }
+                        return;
+                    }
+
+                    // Fan out live agent control-plane broadcasts
+                    if (
+                        msg.method === 'agent.catalog_updated' ||
+                        msg.method === 'agent.run_event' ||
+                        msg.method === 'agent.run_interrupt' ||
+                        msg.method === 'agent.run_resumed'
+                    ) {
+                        const notification = {
+                            method: msg.method,
+                            params: msg.params,
+                        } as AgentWsNotification;
+                        this.agentEventListeners.forEach((fn) => {
+                            try {
+                                fn(notification);
+                            } catch {}
+                        });
+                        return;
+                    }
 
                     // Trigger background outbox flush when Desktop heartbeat confirms Langfuse collector is ready
                     if (msg.type === 'pong' && msg.telemetry?.status === 'ready') {
@@ -957,5 +1012,194 @@ export class MeshClientService {
                 })
             );
         });
+    }
+
+    // =========================================================================
+    // MVP 4: Agent Control Plane (Shared REST + WebSocket RPC Contract)
+    // =========================================================================
+
+    public getControlPlaneDesktopNode(): MeshNodeEndpoint | null {
+        const selected =
+            this.selectedTarget.nodeId !== 'local_engine'
+                ? this.activeNodes.get(this.selectedTarget.nodeId)
+                : undefined;
+        if (selected && selected.isOnline && selected.deviceTier === 'thick_desktop') {
+            return selected;
+        }
+        return (
+            Array.from(this.activeNodes.values()).find(
+                (n) => n.deviceTier === 'thick_desktop' && n.isOnline
+            ) ?? null
+        );
+    }
+
+    public async getLocalOriginClientId(): Promise<string> {
+        const identity = await MeshIdentityService.getInstance().getOrCreateIdentity();
+        return `mobile:${identity.node_id}`;
+    }
+
+    public subscribeAgentEvents(listener: (event: AgentWsNotification) => void): () => void {
+        this.agentEventListeners.add(listener);
+        this.ensurePersistentConnection();
+        return () => {
+            this.agentEventListeners.delete(listener);
+        };
+    }
+
+    private sendAgentWsRpc<T>(method: string, params: Record<string, any>): Promise<T> {
+        return new Promise((resolve, reject) => {
+            const ws = this.persistentWs;
+            if (!ws || ws.readyState !== WebSocket.OPEN) {
+                reject(new Error('Desktop WebSocket unavailable'));
+                return;
+            }
+            const id = `agent_rpc_${Date.now()}_${Math.floor(Math.random() * 10000)}`;
+            const timer = setTimeout(() => {
+                this.pendingAgentRpcs.delete(id);
+                reject(new Error(`RPC ${method} timed out`));
+            }, 15000);
+
+            this.pendingAgentRpcs.set(id, { resolve, reject, timer });
+            ws.send(JSON.stringify({ jsonrpc: '2.0', id, method, params }));
+        });
+    }
+
+    private requireDesktopNode(): MeshNodeEndpoint {
+        const node = this.getControlPlaneDesktopNode();
+        if (!node) {
+            throw new Error('No online Desktop Daemon found on mesh. Connect to Desktop first.');
+        }
+        return node;
+    }
+
+    public async listRegisteredAgents(onlyReady = true): Promise<RegisteredAgentDTO[]> {
+        const desktop = this.requireDesktopNode();
+        const url = `http://${desktop.ip}:${desktop.port}/api/v1/agents${onlyReady ? '?onlyReady=true' : ''}`;
+        const res = await fetch(url, {
+            headers: { Authorization: `Bearer ${desktop.sharedToken}` },
+        });
+        if (!res.ok) throw new Error(`Failed to fetch agents (HTTP ${res.status})`);
+        const data = await res.json();
+        return Array.isArray(data.agents) ? data.agents : [];
+    }
+
+    public async listAgentRuns(
+        limit = 30,
+        filters?: { agentId?: string; status?: string }
+    ): Promise<AgentRunDTO[]> {
+        const desktop = this.requireDesktopNode();
+        const qs = new URLSearchParams({ limit: String(limit) });
+        if (filters?.agentId) qs.set('agentId', filters.agentId);
+        if (filters?.status) qs.set('status', filters.status);
+
+        const res = await fetch(
+            `http://${desktop.ip}:${desktop.port}/api/v1/agents/runs?${qs.toString()}`,
+            { headers: { Authorization: `Bearer ${desktop.sharedToken}` } }
+        );
+        if (!res.ok) throw new Error(`Failed to fetch runs (HTTP ${res.status})`);
+        const data = await res.json();
+        return Array.isArray(data.runs) ? data.runs : [];
+    }
+
+    public async getAgentRunEvents(
+        runId: string,
+        afterSeq = 0
+    ): Promise<{ run: AgentRunDTO; events: AgentRunEventDTO[] }> {
+        const desktop = this.requireDesktopNode();
+        const res = await fetch(
+            `http://${desktop.ip}:${desktop.port}/api/v1/agents/runs/${encodeURIComponent(runId)}/events?afterSeq=${afterSeq}`,
+            { headers: { Authorization: `Bearer ${desktop.sharedToken}` } }
+        );
+        if (!res.ok) throw new Error(`Failed to replay events (HTTP ${res.status})`);
+        return await res.json();
+    }
+
+    public async startAgentRun(
+        agentId: string,
+        inputs: Record<string, any>
+    ): Promise<{ runId: string; traceId: string; sessionId: string }> {
+        const originClientId = await this.getLocalOriginClientId();
+        this.ensurePersistentConnection();
+
+        if (this.persistentWs && this.persistentWs.readyState === WebSocket.OPEN) {
+            return await this.sendAgentWsRpc('agent.run_start', {
+                agentId,
+                inputs,
+                originClientId,
+            });
+        }
+
+        const desktop = this.requireDesktopNode();
+        const res = await fetch(`http://${desktop.ip}:${desktop.port}/api/v1/agents/runs`, {
+            method: 'POST',
+            headers: {
+                'Content-Type': 'application/json',
+                Authorization: `Bearer ${desktop.sharedToken}`,
+            },
+            body: JSON.stringify({ agentId, inputs, originClientId }),
+        });
+        const data = await res.json().catch(() => ({}));
+        if (!res.ok || !data.runId) {
+            throw new Error(data.error || `Failed to launch agent (HTTP ${res.status})`);
+        }
+        return data;
+    }
+
+    public async resumeAgentRun(
+        runId: string,
+        interruptId: string,
+        resume: unknown
+    ): Promise<{ ok: boolean; error?: string }> {
+        if (this.persistentWs && this.persistentWs.readyState === WebSocket.OPEN) {
+            return await this.sendAgentWsRpc('agent.run_resume', {
+                runId,
+                interruptId,
+                resume,
+            });
+        }
+
+        const desktop = this.requireDesktopNode();
+        const res = await fetch(
+            `http://${desktop.ip}:${desktop.port}/api/v1/agents/runs/${encodeURIComponent(runId)}/resume`,
+            {
+                method: 'POST',
+                headers: {
+                    'Content-Type': 'application/json',
+                    Authorization: `Bearer ${desktop.sharedToken}`,
+                },
+                body: JSON.stringify({ interruptId, resume }),
+            }
+        );
+        return await res.json();
+    }
+
+    public async cancelAgentRun(runId: string): Promise<{ ok: boolean; cancelled?: boolean }> {
+        if (this.persistentWs && this.persistentWs.readyState === WebSocket.OPEN) {
+            return await this.sendAgentWsRpc('agent.run_cancel', { runId });
+        }
+
+        const desktop = this.requireDesktopNode();
+        const res = await fetch(
+            `http://${desktop.ip}:${desktop.port}/api/v1/agents/runs/${encodeURIComponent(runId)}/cancel`,
+            {
+                method: 'POST',
+                headers: { Authorization: `Bearer ${desktop.sharedToken}` },
+            }
+        );
+        return await res.json();
+    }
+
+    public async fetchAgentArtifactText(runId: string, relPath: string): Promise<string> {
+        const desktop = this.requireDesktopNode();
+        const encodedRel = relPath
+            .split('/')
+            .map((seg) => encodeURIComponent(seg))
+            .join('/');
+        const res = await fetch(
+            `http://${desktop.ip}:${desktop.port}/api/v1/agents/runs/${encodeURIComponent(runId)}/artifacts/${encodedRel}`,
+            { headers: { Authorization: `Bearer ${desktop.sharedToken}` } }
+        );
+        if (!res.ok) throw new Error(`Failed to fetch artifact (HTTP ${res.status})`);
+        return await res.text();
     }
 }

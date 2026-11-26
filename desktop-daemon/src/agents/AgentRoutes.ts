@@ -102,9 +102,18 @@ export function createAgentRouter(): Router {
     // =========================================================================
 
     // GET /api/v1/agents/runs
+    // GET /api/v1/agents/runs?limit=30&agentId=<id>&status=<status>
     router.get('/api/v1/agents/runs', (req: Request, res: Response) => {
         const limit = Math.min(100, Math.max(1, parseInt(String(req.query.limit || '30'), 10) || 30));
-        const runs = runManager.listRuns(limit);
+        const agentId =
+            typeof req.query.agentId === 'string' && req.query.agentId.trim()
+                ? req.query.agentId.trim()
+                : undefined;
+        const status =
+            typeof req.query.status === 'string' && req.query.status.trim()
+                ? req.query.status.trim()
+                : undefined;
+        const runs = runManager.listRuns(limit, { agentId, status });
         return res.json({ runs });
     });
 
